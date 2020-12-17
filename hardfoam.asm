@@ -9,38 +9,34 @@
 ; Exomizer also uses $0334-$03D0 as decrunching buffer; decrunching there will hang
 ; AND: we may only WRITE <$1000, so reading BASIC/KERNAL would be OK
 
-; Usable RAM:  $0200-$0258 / $0293-$02FF = $58+$6C = 196 bytes
-; Usable INIT: $03D0-$03FF / $0400-$07E7 SCREEN / $07E8-$0800
+; Usable RAM:  $0200-$0258 (89 bytes) / $0293-$02FF (109 bytes)
+; Usable INIT: $03D0-$03FF (48 bytes) / $0400-$07E7 SCREEN (200 bytes 5 middle rows) / $07E8-$0800 (24 bytes)
+
+INIT=$0400 ; use this as run address for cruncher
 
 !ifndef DEBUG {DEBUG=1}
 
 !source "constants.inc"
 
-; ZP
+; ZP addresses
 !addr CharCol=$02
+!addr _CursorPos=$03 ; ptr
+!addr _ColorPos=$05 ; ptr
 !addr Tmp1=$07
 
 *=$0801
-!if DEBUG=0 {
-    !byte $0b,$08,$b6,$07,$9e,$32,$30,$36,$31,$00,$00,$00   ; 1974 SYS2061
-} else {
+!if DEBUG=1 {
     !initmem $74
     !byte $0b,$08,$00,$13,$9e,$34,$38,$36,$34,$00,$00,$00   ; 4864 SYS4864 ; developer init
 }
 
-;2061
+; 2049 in DEBUG=0 mode, so use Exomizer to run from $0801
 start:
-            ; TODO move (most) VIC stuff to INIT
-            cld
-            lda #BLACK
-            sta $D020
-            lda #BROWN
-            sta $D021
-
             ldy #<($0400+15*40+7)
             lda #>($0400+15*40+7)
             jsr SetCursor
-            ldy #T_WASHERE
+            ldy #0
+            ldx #T_WASHERE
             jsr DrawText
 
 -           jsr $FFE4 ; Get From Keyboard
@@ -85,12 +81,10 @@ DrawCard:
 ; TEXT DRAWING
 ;----------------------------------------------------------------------------
 
-; TODO: Switch X and Y around, so cursor can be put in ZP! This will save some bytes
-
-; draws text Y at cursor+X (clobbers X,Tmp1)
+; draws text X at cursor+Y (clobbers X,Y,Tmp1)
 DrawText:
-            dex
--           lda TextData,y
+            dey
+-           lda TextData,x
             beq +++                     ; text ends with 0
             bpl .no_macro
             jsr DrawMacro
@@ -101,20 +95,20 @@ DrawText:
 .put_space:
             lda #32
             jsr MovePutChar
-+           iny
++           inx
             bne -
 +++         rts
 
-; draws macro A ($80..$FF) at cursor+X-1 (clobbers X,Tmp1)
+; draws macro A ($80..$FF) at cursor+Y-1 (clobbers X,Tmp1)
 DrawMacro:
-            sty Tmp1
-            tay                         ; A will be $80..$FF
---          lda TextMacroData-$80,y
+            stx Tmp1
+            tax                         ; A will be $80..$FF
+--          lda TextMacroData-$80,x
             jsr MovePutChar3F           ; C=1 if >=$40
             bcs ++                      ; macros end with +$40
-            iny
+            inx
             bne --
-++          ldy Tmp1
+++          ldx Tmp1
             rts
 
 
@@ -126,39 +120,35 @@ MovePutChar3F:
             cmp #$40 ; C=1 if >=$40
             and #$3F
 MovePutChar:
-            inx
-; draws char in A at cursor+X with color CharCol (clobbers X)
+            iny
+; draws char in A at cursor+Y with color CharCol
 PutChar:
-            .putc1=*+1
-            .putc1h=*+2
-            sta $0400,x
+            sta (_CursorPos),y
             pha
             lda CharCol
-            .putc2=*+1
-            .putc2h=*+2
-            sta $d400,x
+            sta (_ColorPos),y
             pla
             rts
 
 ; puts cursor at Y/A Y=low byte, A=high byte (clobbers A)
 SetCursor:
-            sty .putc1
-            sty .putc2
-            sta .putc1h
+            sty _CursorPos
+            sty _ColorPos
+            sta _CursorPos+1
             eor #$dc     ; turn 4/5/6/7 into $D8/9/a/b
-            sta .putc2h
+            sta _ColorPos+1
             rts
 
 ; moves the cursor a row down (clobbers A)
 CursorDown:
-            lda .putc1 ; low byte
+            lda _CursorPos ; low byte
             clc
             adc #40
-            sta .putc1
-            sta .putc2
+            sta _CursorPos
+            sta _ColorPos
             bcc +
-            inc .putc1h
-            inc .putc2h
+            inc _CursorPos+1
+            inc _ColorPos+1
 +           rts
 
 
@@ -187,40 +177,58 @@ Glyphs:
 
 
 ;----------------------------------------------------------------------------
+; CARDS
+;----------------------------------------------------------------------------
+
+; Cards Data (SoA)
+; 1 byte LTSSCCCC : L=Legendary T=Type(0=Monster/1=Spell) SS=Suit(0,1,2,3) CCCC=Cost(0..15)
+Cards_LTSuitCost:
+    !byte 0
+; 1 byte AAAADDDD : AAAA=Attack DDDD=Defense
+Cards_AttackDefense:
+    !byte 0
+; 1 byte Name TextPtr
+Cards_Name:
+    !byte 0
+; 1 byte Effect TextPtr (also used to perform effect)
+Cards_EffectText:
+    !byte 0
+; 1 byte GlyphPtr
+Cards_Glyph:
+    !byte 0
+
+
+;----------------------------------------------------------------------------
 ; TEXT
 ; Note that this can be max $180 bytes!
 ;----------------------------------------------------------------------------
 
-; A text can point to macro text that comes from another block, thereby indexable
-; char=0 -> end, chars<$40 -> put, chars>$80 -> macro lookup char-$80
+; Char=0->End, Char<$40->Put, Chars<$80->Put+Space, Chars>=$80->Macro Lookup Char-$80 (Max 256 bytes)
 TextData:
-        T_WASHERE=*-TextData
-        !scr TM_POLYSTYRENE,"waShere",0
+    T_WASHERE=*-TextData
+    !scr TM_POLYSTYRENE,"waShere",0
 !if *-TextData >= $FF { !error "Out of TextData memory" }
 
-; Max offset is 127, so this is really LIMITED
+; Macros (Max 128 bytes) Max offset is 127, so this is really LIMITED
 TextMacroData:
-        TM_POLYSTYRENE=$80+*-TextMacroData
-        !scr "polystyren",'e'+$40
-        TM_GOBLIN=$80+*-TextMacroData
-        !scr "gobli",'n'+$40
-        TM_CANDY=$80+*-TextMacroData
-        !scr "cand",'y'+$40
-        TM_SOAP=$80+*-TextMacroData
-        !scr "soa",'p'+$40
+    TM_POLYSTYRENE=$80+*-TextMacroData
+    !scr "polystyren",'e'+$40
+    TM_GOBLIN=$80+*-TextMacroData
+    !scr "gobli",'n'+$40
+    TM_CANDY=$80+*-TextMacroData
+    !scr "cand",'y'+$40
+    TM_SOAP=$80+*-TextMacroData
+    !scr "soa",'p'+$40
 !if *-TextMacroData >= $80 { !error "Out of TextMacroData memory" }
 
 ; Max 2K
 !if * >= $1000 { !error "Out of memory" }
-!fill $1000-*-1,$74
-!byte $FF ; should be at $0FFF
 
 
 ;----------------------------------------------------------------------------
-; INIT CODE (03D0-07FF)
+; DEBUG BUILD ONLY copy loop for INIT at $1300=4864
 ;----------------------------------------------------------------------------
 !if DEBUG=1 {
-            ; copy loop for INIT at $1300=4864
             *=$1300
             ldx #$100-$D0-1
 -           lda $13D0,x
@@ -238,15 +246,38 @@ TextMacroData:
             sta $0700,x
             inx
             bne -
-            jmp INIT
+            jmp REALINIT
             *=$13D0 ; 5072
 } else {
             *=$03D0
 }
-!pseudopc $03D0 {
-INIT:
-            ; set up ZP pointers
+
+;----------------------------------------------------------------------------
+; DATA (03D0-03FF)
+;----------------------------------------------------------------------------
+            !fill $30,0 ; FREE RAM AT $03D0-$0400
+
+;----------------------------------------------------------------------------
+; INIT CODE (0400-07FF)
+;----------------------------------------------------------------------------
+!pseudopc $0400 {
+            ; TODO add PETSCII logo here in the upper rows?
+            ; INIT CODE
+REALINIT:
+!if INIT != REALINIT { !error "REALINIT=", REALINIT, " so update INIT and make file!" }
+            cld ; who knows?
+
+            ; setup VIC
+            lda #BLACK
+            sta $D020
+            lda #BROWN
+            sta $D021
+            lda #$20 ; default uppercase
+            sta $D018
+            ; lock uppercase
+            lda #$80
+            sta $0291
+
             jmp start
 }
-!fill $0800-(*&$0FFF)-1,$74
-!byte $FF ; should be at $07FF
+!fill $0800-(*&$0FFF),$20
