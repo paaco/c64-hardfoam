@@ -272,7 +272,7 @@ REALINIT:
             sta $D020
             lda #BROWN
             sta $D021
-            lda #$20 ; default uppercase
+            lda #20 ; default uppercase
             sta $D018
             ; lock uppercase
             lda #$80
