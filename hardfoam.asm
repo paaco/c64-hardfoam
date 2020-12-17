@@ -16,7 +16,9 @@
 
 !source "constants.inc"
 
+; ZP
 !addr CharCol=$02
+!addr Tmp1=$07
 
 *=$0801
 !if DEBUG=0 {
@@ -28,9 +30,8 @@
 
 ;2061
 start:
-            lda #BLACK
-            sta $0286 ; Current Character Color code
-            jsr $E544 ; CLS
+            ; TODO move (most) VIC stuff to INIT
+            cld
             lda #BLACK
             sta $D020
             lda #BROWN
@@ -39,13 +40,8 @@ start:
             ldy #<($0400+15*40+7)
             lda #>($0400+15*40+7)
             jsr SetCursor
-            jsr DrawCard
-
-            ldx #FlavorText_End-FlavorText-1
--           lda FlavorText,x
-            sta $0400,x
-            dex
-            bpl -
+            ldy #T_WASHERE
+            jsr DrawText
 
 -           jsr $FFE4 ; Get From Keyboard
             beq -
@@ -55,8 +51,8 @@ start:
 ;----------------------------------------------------------------------------
 ; CARD DRAWING
 ;----------------------------------------------------------------------------
-
-; draws card template at cursor in selected color and moves cursor
+            *=$0900 ; DEBUG
+; draws card template at cursor+X in selected color and moves cursor
 DrawCard:
             lda #GREY
             sta CharCol
@@ -86,18 +82,62 @@ DrawCard:
 
 
 ;----------------------------------------------------------------------------
+; TEXT DRAWING
+;----------------------------------------------------------------------------
+
+; TODO: Switch X and Y around, so cursor can be put in ZP! This will save some bytes
+
+; draws text Y at cursor+X (clobbers X,Tmp1)
+DrawText:
+            dex
+-           lda TextData,y
+            beq +++                     ; text ends with 0
+            bpl .no_macro
+            jsr DrawMacro
+            jmp .put_space
+.no_macro:
+            jsr MovePutChar3F           ; C=1 if >=$40
+            bcc +
+.put_space:
+            lda #32
+            jsr MovePutChar
++           iny
+            bne -
++++         rts
+
+; draws macro A ($80..$FF) at cursor+X-1 (clobbers X,Tmp1)
+DrawMacro:
+            sty Tmp1
+            tay                         ; A will be $80..$FF
+--          lda TextMacroData-$80,y
+            jsr MovePutChar3F           ; C=1 if >=$40
+            bcs ++                      ; macros end with +$40
+            iny
+            bne --
+++          ldy Tmp1
+            rts
+
+
+;----------------------------------------------------------------------------
 ; CHARACTER DRAWING
 ;----------------------------------------------------------------------------
 
-; puts character at cursor + X, in color at $02
+MovePutChar3F:
+            cmp #$40 ; C=1 if >=$40
+            and #$3F
+MovePutChar:
+            inx
+; draws char in A at cursor+X with color CharCol (clobbers X)
 PutChar:
             .putc1=*+1
             .putc1h=*+2
             sta $0400,x
+            pha
             lda CharCol
             .putc2=*+1
             .putc2h=*+2
             sta $d400,x
+            pla
             rts
 
 ; puts cursor at Y/A Y=low byte, A=high byte (clobbers A)
@@ -146,12 +186,29 @@ Card_Frame_Plain_Bottom:
 Glyphs:
 
 
-FlavorText:
-    !scr "polystyrene","cobalt","candy","soapstone"
-; some small compression techniques tricks:
-; with only PETSCII <$40 for texts: use bit 6 to add a space and use bit 7 to insert a complete word from a dictionary
-    !scr "aleX",'x'+$80,'X'+$80
-FlavorText_End:
+;----------------------------------------------------------------------------
+; TEXT
+; Note that this can be max $180 bytes!
+;----------------------------------------------------------------------------
+
+; A text can point to macro text that comes from another block, thereby indexable
+; char=0 -> end, chars<$40 -> put, chars>$80 -> macro lookup char-$80
+TextData:
+        T_WASHERE=*-TextData
+        !scr TM_POLYSTYRENE,"waShere",0
+!if *-TextData >= $FF { !error "Out of TextData memory" }
+
+; Max offset is 127, so this is really LIMITED
+TextMacroData:
+        TM_POLYSTYRENE=$80+*-TextMacroData
+        !scr "polystyren",'e'+$40
+        TM_GOBLIN=$80+*-TextMacroData
+        !scr "gobli",'n'+$40
+        TM_CANDY=$80+*-TextMacroData
+        !scr "cand",'y'+$40
+        TM_SOAP=$80+*-TextMacroData
+        !scr "soa",'p'+$40
+!if *-TextMacroData >= $80 { !error "Out of TextMacroData memory" }
 
 ; Max 2K
 !if * >= $1000 { !error "Out of memory" }
