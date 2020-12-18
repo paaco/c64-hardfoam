@@ -33,6 +33,27 @@ INIT=$0400 ; use this as run address for cruncher
 
 ; 2049 in DEBUG=0 mode, so use Exomizer to run from $0801
 Start:
+            ; upper player has 7 health
+            ldy #<($0400+39)
+            lda #>($0400+39)
+            jsr SetCursor
+            lda #10
+            sec
+            sbc #7
+            tax
+            lda #$0A
+            ldy #0
+            jsr DrawHealthBar
+
+            ; lower player has 4 health
+            ldy #<($0400+15*40+39)
+            lda #>($0400+15*40+39)
+            jsr SetCursor
+            ldx #4
+            lda #$A0
+            ldy #0
+            jsr DrawHealthBar
+
             ldy #<($0400+15*40+7)
             lda #>($0400+15*40+7)
             jsr SetCursor
@@ -44,8 +65,8 @@ Start:
             ldx #T_WASHERE
             jsr DrawText
 
-            ldy #<($0400+4*40)
-            lda #>($0400+4*40)
+            ldy #<($0400+4*40+2)
+            lda #>($0400+4*40+2)
             jsr SetCursor
 
             ldy #$FF
@@ -116,6 +137,30 @@ DrawBlock:
             inx
             bne -
 +           rts
+
+
+;----------------------------------------------------------------------------
+; HEALTH DRAWING
+;----------------------------------------------------------------------------
+
+; draws X(0..10) as 10 high health bar in colors in A (2 nibbles) at cursor + Y+1 (clobbers A,X,Tmp1)
+DrawHealthBar:
+            sta CharCol
+            stx Tmp1
+            ldx #10
+-           cpx Tmp1
+            bne +
+            ; switch to second color
+            lsr CharCol
+            lsr CharCol
+            lsr CharCol
+            lsr CharCol
++           lda #$53 ; heart
+            jsr PutChar
+            jsr MoveCursorDown
+            dex
+            bne -
+            rts
 
 
 ;----------------------------------------------------------------------------
@@ -192,6 +237,18 @@ SetCursor:
             eor #$DC                    ; turn 4/5/6/7 into $D8/9/a/b
             sta _ColorPos+1
             rts
+
+; moves cursor down a row (clobbers A)
+MoveCursorDown:
+            lda _CursorPos
+            clc
+            adc #40
+            sta _CursorPos
+            sta _ColorPos
+            bcc +
+            inc _CursorPos+1
+            inc _ColorPos+1
++           rts
 
 AddFrameModuloToY:
             lda #40-5
