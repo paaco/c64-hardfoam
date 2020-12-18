@@ -23,6 +23,7 @@ INIT=$0400 ; use this as run address for cruncher
 !addr _CursorPos=$03 ; ptr
 !addr _ColorPos=$05 ; ptr
 !addr Tmp1=$07
+!addr Tmp2=$08
 
 *=$0801
 !if DEBUG=1 {
@@ -31,13 +32,45 @@ INIT=$0400 ; use this as run address for cruncher
 }
 
 ; 2049 in DEBUG=0 mode, so use Exomizer to run from $0801
-start:
+Start:
             ldy #<($0400+15*40+7)
             lda #>($0400+15*40+7)
             jsr SetCursor
-            ldy #0
+
+            lda #GREY
+            sta CharCol
+
+            ldy #$FF
             ldx #T_WASHERE
             jsr DrawText
+
+            ldy #<($0400+4*40)
+            lda #>($0400+4*40)
+            jsr SetCursor
+
+            ldy #$FF
+            lda #%01000110
+            jsr DrawCardTopFrameDecorated
+
+            ldy #6-1
+            lda #%00000011
+            jsr DrawCardTopFrameDecorated
+
+            ldy #12-1
+            lda #%00000011
+            jsr DrawCardTopFrameDecorated
+
+            ldy #18-1
+            lda #%00000011
+            jsr DrawCardTopFrameDecorated
+
+            ldy #24-1
+            lda #%00000011
+            jsr DrawCardTopFrameDecorated
+
+            ldy #30-1
+            lda #%00000011
+            jsr DrawCardTopFrameDecorated
 
 -           jsr $FFE4 ; Get From Keyboard
             beq -
@@ -45,61 +78,25 @@ start:
 
 
 ;----------------------------------------------------------------------------
-; CARD DRAWING
-;----------------------------------------------------------------------------
-            *=$0900 ; DEBUG
-; draws card template at cursor+X in selected color and moves cursor
-DrawCard:
-            lda #GREY
-            sta CharCol
-            ldx #5-1
--           lda Card_Frame_Plain_Top,x
-            jsr PutChar
-            dex
-            bpl -
-            jsr CursorDown
-            ldy #4
--           ldx #0
-            lda #Card_Frame_Left
-            jsr PutChar
-            ; TODO glyph + buffer color
-            ldx #4
-            lda #Card_Frame_Right
-            jsr PutChar
-            jsr CursorDown
-            dey
-            bne -
-            ldx #5-1
--           lda Card_Frame_Plain_Bottom,x
-            jsr PutChar
-            dex
-            bpl -
-            rts
-
-
-;----------------------------------------------------------------------------
 ; TEXT DRAWING
 ;----------------------------------------------------------------------------
 
-; draws text X at cursor+Y (clobbers X,Y,Tmp1)
+; draws text X at cursor + Y+1 (clobbers A,X,Y,Tmp1)
 DrawText:
-            dey
 -           lda TextData,x
-            beq +++                     ; text ends with 0
-            bpl .no_macro
+            beq ++++                    ; text ends with 0
+            bpl +
             jsr DrawMacro
-            jmp .put_space
-.no_macro:
-            jsr MovePutChar3F           ; C=1 if >=$40
-            bcc +
-.put_space:
-            lda #32
+            jmp ++
++           jsr MovePutChar3F           ; C=1 if >=$40
+            bcc +++
+++          lda #32                     ; space
             jsr MovePutChar
-+           inx
++++         inx
             bne -
-+++         rts
+++++        rts
 
-; draws macro A ($80..$FF) at cursor+Y-1 (clobbers X,Tmp1)
+; draws macro A ($80..$FF) at cursor + Y+1 (clobbers A,Y,Tmp1)
 DrawMacro:
             stx Tmp1
             tax                         ; A will be $80..$FF
@@ -111,14 +108,71 @@ DrawMacro:
 ++          ldx Tmp1
             rts
 
+; draws block X at cursor + Y+1 (clobbers A,X,Y)
+DrawBlock:
+-           lda BlockData,x
+            beq +
+            jsr MovePutChar
+            inx
+            bne -
++           rts
+
+
+;----------------------------------------------------------------------------
+; CARD DRAWING
+;----------------------------------------------------------------------------
+
+; draws card top frame at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2)
+DrawCardTopFrameDecorated:
+            jsr DrawCardTopDecoration
+            ldx #B_FRAMETOP+2
+            bne .top_frame              ; always
+
+; draws card top frame at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2)
+DrawCardTopFrame:
+            ldx #B_FRAMETOP
+.top_frame: jsr DrawBlock
+            lda #3
+            sta Tmp2
+-           jsr AddFrameModuloToY
+            lda #116 ; Left side (petscii uses 116, but 101 is identical)
+            jsr MovePutChar
+            lda #3
+            jsr AddAToY
+            lda #106 ; Right side (petscii uses 106, but 103 is identical)
+            jsr MovePutChar
+            dec Tmp2
+            bne -
+            jsr AddFrameModuloToY
+            ldx #B_FRAMEBOTTOM
+            bne DrawBlock               ; always
+
+; draws card top frame LTSSCCCC decoration A at cursor + Y+1 (clobbers A,X,Y)
+DrawCardTopDecoration:
+            pha
+            ldx #$D7                    ; T=0(spell)  D7 (ball)
+            ;     LTSSCCCC
+            and #%01000000
+            beq +
+            inx                         ; T=1(Monster) D8 (clover)
++           txa
+            jsr MovePutChar
+            pla
+            ;     LTSSCCCC
+            and #%00001111
+            ora #$B0 ; 0..9 reversed
+            bne MovePutChar             ; always
+
 
 ;----------------------------------------------------------------------------
 ; CHARACTER DRAWING
 ;----------------------------------------------------------------------------
 
+; draws char in A at cursor+Y+1 with color CharCol (clobbers Y) and sets C=1 if A>=$40
 MovePutChar3F:
             cmp #$40 ; C=1 if >=$40
             and #$3F
+; draws char in A at cursor+Y+1 with color CharCol (clobbers Y)
 MovePutChar:
             iny
 ; draws char in A at cursor+Y with color CharCol
@@ -135,52 +189,26 @@ SetCursor:
             sty _CursorPos
             sty _ColorPos
             sta _CursorPos+1
-            eor #$dc     ; turn 4/5/6/7 into $D8/9/a/b
+            eor #$DC                    ; turn 4/5/6/7 into $D8/9/a/b
             sta _ColorPos+1
             rts
 
-; moves the cursor a row down (clobbers A)
-CursorDown:
-            lda _CursorPos ; low byte
+AddFrameModuloToY:
+            lda #40-5
+; adds A to Y (clobbers A,Y,Tmp1) 8 bytes+3N , anders 5N; N=4 omslag
+AddAToY:
+            sta Tmp1
+            tya
             clc
-            adc #40
-            sta _CursorPos
-            sta _ColorPos
-            bcc +
-            inc _CursorPos+1
-            inc _ColorPos+1
-+           rts
+            adc Tmp1
+            tay
+            rts
 
 
 ;----------------------------------------------------------------------------
-; DATA
+; CARDS SoA
 ;----------------------------------------------------------------------------
 
-Card_Frame_Plain_Top:
-    !byte 79,119,119,119,80     ; plain top row
-Card_Frame_Left = 116
-Card_Frame_Right = 106
-Card_Frame_Plain_Bottom:
-    !byte 76,111,111,111,122    ; plain bottom row
-
-; card layout:
-; 5 chars wide, 6 high P---] |/\/| |/\/| |/\/| |   | AA-DD
-; 79,119,119,119,80
-; 116,0,0,0,106 x4 ;; ;HE? 101==116 en 106==103 WTF? zelfs in LOWER CASE?
-; 76,111,111,111,122
-; the glyph is 3x3 in the suit color
-; each card has a name and some text associated with it
-; if there's room we can even add flavor text
-
-; 3x3 bytes per glyph
-Glyphs:
-
-
-;----------------------------------------------------------------------------
-; CARDS
-;----------------------------------------------------------------------------
-
-; Cards Data (SoA)
 ; 1 byte LTSSCCCC : L=Legendary T=Type(0=Monster/1=Spell) SS=Suit(0,1,2,3) CCCC=Cost(0..15)
 Cards_LTSuitCost:
     !byte 0
@@ -200,10 +228,9 @@ Cards_Glyph:
 
 ;----------------------------------------------------------------------------
 ; TEXT
-; Note that this can be max $180 bytes!
 ;----------------------------------------------------------------------------
 
-; Char=0->End, Char<$40->Put, Chars<$80->Put+Space, Chars>=$80->Macro Lookup Char-$80 (Max 256 bytes)
+; Char=0->End, Char<$40->Put, Chars<$80->Put+Space, Chars>=$80->Macro Lookup Char-$80 (Max 255 bytes)
 TextData:
     T_WASHERE=*-TextData
     !scr TM_POLYSTYRENE,"waShere",0
@@ -220,6 +247,14 @@ TextMacroData:
     TM_SOAP=$80+*-TextMacroData
     !scr "soa",'p'+$40
 !if *-TextMacroData >= $80 { !error "Out of TextMacroData memory" }
+
+; Plain text blocks (Max 255 bytes)
+BlockData:
+    B_FRAMETOP=*-BlockData
+    !byte 79,119,119,119,80,0
+    B_FRAMEBOTTOM=*-BlockData
+    !byte 76,111,111,111,122,0
+!if *-BlockData >= $FF { !error "Out of BlockData memory" }
 
 ; Max 2K
 !if * >= $1000 { !error "Out of memory" }
@@ -278,6 +313,6 @@ REALINIT:
             lda #$80
             sta $0291
 
-            jmp start
+            jmp Start
 }
 !fill $0800-(*&$0FFF),$20
