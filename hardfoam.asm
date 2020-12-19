@@ -24,6 +24,8 @@ INIT=$0400 ; use this as run address for cruncher
 !addr _ColorPos=$05 ; ptr
 !addr Tmp1=$07
 !addr Tmp2=$08
+!addr ZP_RNG_LOW = $09
+!addr ZP_RNG_HIGH = $0A
 
 *=$0801
 !if DEBUG=1 {
@@ -34,7 +36,7 @@ INIT=$0400 ; use this as run address for cruncher
 ; 2049 in DEBUG=0 mode, so use Exomizer to run from $0801
 Start:
             ; upper player has 7 health
-            ldy #<($0400+39)
+            ldx #<($0400+39)
             lda #>($0400+39)
             jsr SetCursor
             lda #10
@@ -46,7 +48,7 @@ Start:
             jsr DrawHealthBar
 
             ; lower player has 4 health
-            ldy #<($0400+15*40+39)
+            ldx #<($0400+15*40+39)
             lda #>($0400+15*40+39)
             jsr SetCursor
             ldx #4
@@ -54,7 +56,7 @@ Start:
             ldy #0
             jsr DrawHealthBar
 
-            ldy #<($0400+15*40+7)
+            ldx #<($0400+15*40+7)
             lda #>($0400+15*40+7)
             jsr SetCursor
 
@@ -65,37 +67,22 @@ Start:
             ldx #T_WASHERE
             jsr DrawText
 
-            ldy #<($0400+4*40+2)
-            lda #>($0400+4*40+2)
+            ldx #<($0400+4*40)
+            lda #>($0400+4*40)
             jsr SetCursor
 
-            ldy #$FF
+            ldy #0
+            jsr DrawCardBack
+
+            ldy #10-2
             lda #%01000110
             jsr DrawCardTopFrameDecorated
-
-            ldy #6-1
-            lda #%00000011
-            jsr DrawCardTopFrameDecorated
-
-            ldy #12-1
-            lda #%00000011
-            jsr DrawCardTopFrameDecorated
-
-            ldy #18-1
-            lda #%00000011
-            jsr DrawCardTopFrameDecorated
-
-            ldy #24-1
-            lda #%00000011
-            jsr DrawCardTopFrameDecorated
-
-            ldy #30-1
-            lda #%00000011
-            jsr DrawCardTopFrameDecorated
+            lda #$34
+            jsr DrawCardBottomDecoration
 
 -           jsr $FFE4 ; Get From Keyboard
             beq -
-            rts
+            jmp * ; prevents RUN/STOP to break
 
 
 ;----------------------------------------------------------------------------
@@ -111,7 +98,9 @@ DrawText:
             jmp ++
 +           jsr MovePutChar3F           ; C=1 if >=$40
             bcc +++
-++          lda #32                     ; space
+++          lda TextData+1,x            ; lookahead
+            beq ++++                    ; text ends directly with 0
+            lda #32                     ; put space
             jsr MovePutChar
 +++         inx
             bne -
@@ -140,6 +129,139 @@ DrawBlock:
 
 
 ;----------------------------------------------------------------------------
+; CARD DRAWING
+;----------------------------------------------------------------------------
+
+; draws card background at cursor (clobbers A,X,Y,Tmp1,Tmp2)
+DrawCardBack:
+            ldx #B_CARDBACKTOP
+            jsr DrawBlockAddModulo
+            lda #4
+            sta Tmp2
+-           ldx #B_CARDBACKMIDDLE
+            jsr DrawBlockAddModulo
+            dec Tmp2
+            bne -
+            ldx #B_CARDBACKBOTTOM
+            jmp DrawBlockAddModulo
+
+; draws card top frame at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2)
+DrawCardTopFrameDecorated:
+            jsr DrawCardTopDecoration
+            ldx #B_FRAMETOP+2
+            bne .top_frame              ; always
+
+; draws card top frame at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2)
+DrawCardTopFrame:
+            ldx #B_FRAMETOP
+.top_frame: jsr DrawBlockAddModulo
+            lda #3
+            sta Tmp2
+-           lda #116 ; Left side (petscii uses 116, but 101 is identical)
+            jsr MovePutChar
+            lda #3
+            jsr AddAToY
+            lda #106 ; Right side (petscii uses 106, but 103 is identical)
+            jsr MovePutChar
+            jsr AddFrameModuloToY
+            dec Tmp2
+            bne -
+            ldx #B_FRAMEBOTTOM
+            bne DrawBlockAddModulo      ; always
+
+; draws card top frame LTSSCCCC decoration A at cursor + Y+1 (clobbers A,X,Y)
+DrawCardTopDecoration:
+            pha
+            ldx #$D7                    ; T=0(spell)  D7 (ball)
+            ;     LTSSCCCC
+            and #%01000000
+            beq +
+            inx                         ; T=1(Monster) D8 (clover)
++           txa
+            jsr MovePutChar
+            pla
+            ;     LTSSCCCC
+            and #%00001111
+            ora #$B0 ; 0..9 reversed
+            bne MovePutChar             ; always
+
+; draws card bottom A/D* decoration A at cursor + Y+1 (clobbers A,X,Y)
+DrawCardBottomDecoration:
+            pha
+            pha
+            lda #206
+            jsr MovePutChar
+            pla
+            lsr
+            lsr
+            lsr
+            lsr
+            jsr +
+            ldx #B_SPACEHEART
+            jsr DrawBlock
+            pla
+            and #$0F
++           ora #$B0
+            bne MovePutChar             ; always
+
+;----------------------------------------------------------------------------
+; CHARACTER DRAWING
+;----------------------------------------------------------------------------
+
+; draws char in A at cursor+Y+1 with color CharCol (clobbers Y) and sets C=1 if A>=$40
+MovePutChar3F:
+            cmp #$40 ; C=1 if >=$40
+            and #$3F
+; draws char in A at cursor+Y+1 with color CharCol (clobbers Y)
+MovePutChar:
+            iny
+; draws char in A at cursor+Y with color CharCol
+PutChar:
+            sta (_CursorPos),y
+            pha
+            lda CharCol
+            sta (_ColorPos),y
+            pla
+            rts
+
+; puts cursor at X/A X=low byte, A=high byte (clobbers A)
+SetCursor:
+            stx _CursorPos
+            stx _ColorPos
+            sta _CursorPos+1
+            eor #$DC                    ; turn 4/5/6/7 into $D8/9/a/b
+            sta _ColorPos+1
+            rts
+
+; moves cursor down a row (clobbers A)
+MoveCursorDown:
+            lda _CursorPos
+            clc
+            adc #40
+            sta _CursorPos
+            sta _ColorPos
+            bcc +
+            inc _CursorPos+1
+            inc _ColorPos+1
++           rts
+
+; draws block X at cursor + Y+1 and adds 40-(width of card frame) to Y (clobbers A,Y,Tmp1)
+DrawBlockAddModulo:
+            jsr DrawBlock
+; adds 40-(width of card frame) to Y (clobbers A,Y,Tmp1)
+AddFrameModuloToY:
+            lda #40-5
+; adds A to Y (clobbers A,Y,Tmp1)
+AddAToY:
+            sta Tmp1
+            tya
+            clc
+            adc Tmp1
+            tay
+            rts
+
+
+;----------------------------------------------------------------------------
 ; HEALTH DRAWING
 ;----------------------------------------------------------------------------
 
@@ -164,102 +286,25 @@ DrawHealthBar:
 
 
 ;----------------------------------------------------------------------------
-; CARD DRAWING
+; prng
 ;----------------------------------------------------------------------------
 
-; draws card top frame at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2)
-DrawCardTopFrameDecorated:
-            jsr DrawCardTopDecoration
-            ldx #B_FRAMETOP+2
-            bne .top_frame              ; always
-
-; draws card top frame at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2)
-DrawCardTopFrame:
-            ldx #B_FRAMETOP
-.top_frame: jsr DrawBlock
-            lda #3
-            sta Tmp2
--           jsr AddFrameModuloToY
-            lda #116 ; Left side (petscii uses 116, but 101 is identical)
-            jsr MovePutChar
-            lda #3
-            jsr AddAToY
-            lda #106 ; Right side (petscii uses 106, but 103 is identical)
-            jsr MovePutChar
-            dec Tmp2
-            bne -
-            jsr AddFrameModuloToY
-            ldx #B_FRAMEBOTTOM
-            bne DrawBlock               ; always
-
-; draws card top frame LTSSCCCC decoration A at cursor + Y+1 (clobbers A,X,Y)
-DrawCardTopDecoration:
-            pha
-            ldx #$D7                    ; T=0(spell)  D7 (ball)
-            ;     LTSSCCCC
-            and #%01000000
-            beq +
-            inx                         ; T=1(Monster) D8 (clover)
-+           txa
-            jsr MovePutChar
-            pla
-            ;     LTSSCCCC
-            and #%00001111
-            ora #$B0 ; 0..9 reversed
-            bne MovePutChar             ; always
-
-
-;----------------------------------------------------------------------------
-; CHARACTER DRAWING
-;----------------------------------------------------------------------------
-
-; draws char in A at cursor+Y+1 with color CharCol (clobbers Y) and sets C=1 if A>=$40
-MovePutChar3F:
-            cmp #$40 ; C=1 if >=$40
-            and #$3F
-; draws char in A at cursor+Y+1 with color CharCol (clobbers Y)
-MovePutChar:
-            iny
-; draws char in A at cursor+Y with color CharCol
-PutChar:
-            sta (_CursorPos),y
-            pha
-            lda CharCol
-            sta (_ColorPos),y
-            pla
-            rts
-
-; puts cursor at Y/A Y=low byte, A=high byte (clobbers A)
-SetCursor:
-            sty _CursorPos
-            sty _ColorPos
-            sta _CursorPos+1
-            eor #$DC                    ; turn 4/5/6/7 into $D8/9/a/b
-            sta _ColorPos+1
-            rts
-
-; moves cursor down a row (clobbers A)
-MoveCursorDown:
-            lda _CursorPos
-            clc
-            adc #40
-            sta _CursorPos
-            sta _ColorPos
-            bcc +
-            inc _CursorPos+1
-            inc _ColorPos+1
-+           rts
-
-AddFrameModuloToY:
-            lda #40-5
-; adds A to Y (clobbers A,Y,Tmp1) 8 bytes+3N , anders 5N; N=4 omslag
-AddAToY:
-            sta Tmp1
-            tya
-            clc
-            adc Tmp1
-            tay
-            rts
+; RANDOM routine from https://codebase64.org/doku.php?id=base:16bit_xorshift_random_generator
+; the RNG. You can get 8-bit random numbers in A or 16-bit numbers
+; from the zero page addresses. Leaves X/Y unchanged.
+random:
+        LDA ZP_RNG_HIGH
+        LSR
+        LDA ZP_RNG_LOW
+        ROR
+        EOR ZP_RNG_HIGH
+        STA ZP_RNG_HIGH ; high part of x ^= x << 7 done
+        ROR             ; A has now x >> 9 and high bit comes from low byte
+        EOR ZP_RNG_LOW
+        STA ZP_RNG_LOW  ; x ^= x >> 9 and the low part of x ^= x << 7 done
+        EOR ZP_RNG_HIGH
+        STA ZP_RNG_HIGH ; x ^= x << 8 done
+        RTS
 
 
 ;----------------------------------------------------------------------------
@@ -284,6 +329,16 @@ Cards_Glyph:
 
 
 ;----------------------------------------------------------------------------
+; GLYPHS
+;----------------------------------------------------------------------------
+
+; 8*4 glyphs * 9 bytes = 288 bytes; 28 glyphs would be 28*9=252
+GlyphData:
+    G_LEGND_GOBLIN=*-GlyphData
+    !byte 73,104,85, 215,215,117, 81,73,41
+
+
+;----------------------------------------------------------------------------
 ; TEXT
 ;----------------------------------------------------------------------------
 
@@ -296,13 +351,15 @@ TextData:
 ; Macros (Max 128 bytes) Max offset is 127, so this is really LIMITED
 TextMacroData:
     TM_POLYSTYRENE=$80+*-TextMacroData
-    !scr "polystyren",'e'+$40
+    !scr "polystyrenE"
     TM_GOBLIN=$80+*-TextMacroData
-    !scr "gobli",'n'+$40
+    !scr "gobliN"
     TM_CANDY=$80+*-TextMacroData
-    !scr "cand",'y'+$40
+    !scr "candY"
     TM_SOAP=$80+*-TextMacroData
-    !scr "soa",'p'+$40
+    !scr "soaP"
+    TM_LEGENDARY=$80+*-TextMacroData
+    !scr "legendarY"
 !if *-TextMacroData >= $80 { !error "Out of TextMacroData memory" }
 
 ; Plain text blocks (Max 255 bytes)
@@ -311,9 +368,21 @@ BlockData:
     !byte 79,119,119,119,80,0
     B_FRAMEBOTTOM=*-BlockData
     !byte 76,111,111,111,122,0
+    B_SPACEHEART=*-BlockData
+    !byte 160,211,0
+    B_CARDBACKTOP=*-BlockData
+    !byte 236,192,192,192,251,0
+    B_CARDBACKMIDDLE=*-BlockData
+    !byte 194,102,102,102,194,0
+    B_CARDBACKBOTTOM=*-BlockData
+    !byte 252,192,192,192,254,0
 !if *-BlockData >= $FF { !error "Out of BlockData memory" }
 
-; Max 2K
+SIZEOF_TEXT=*-TextData
+
+;----------------------------------------------------------------------------
+; MAX 2K ALLOWED HERE
+;----------------------------------------------------------------------------
 !if * >= $1000 { !error "Out of memory" }
 
 
