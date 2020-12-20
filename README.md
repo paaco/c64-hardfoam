@@ -10,11 +10,11 @@ Technical limitations:
 
 # HARD FOAM
 
-The game "Hard Foam" will be a card game like Hearthstone in PETSCII.
+The game "HARD FOAM" will be a card game like Hearthstone in PETSCII.
 
-Cards will be 5x6 characters with a 3x3 glyph, a number of energy to use and attack and values.
+Cards will be 5x6 characters with a 3x3 glyph, a number of energy to use and have attack and defense values.
 
-Background is dark grey.
+Background is blue to accomodate the suit colors.
 
 There will be 4 "suits":
 1. Goblin (black) - who doesn't like goblins?

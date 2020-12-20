@@ -1,4 +1,4 @@
-; Hard Foam - a 2K card game
+; HARD FOAM - a 2K card game
 ; Developed for the https://itch.io/jam/the-c64-cassette-50-charity-competition
 
 ; Only WRITES memory < $1000 and uses Dxxx IO, KERNAL and BASIC calls
@@ -9,7 +9,7 @@
 ; Exomizer also uses $0334-$03D0 as decrunching buffer; decrunching there will hang
 ; AND: we may only WRITE <$1000, so reading BASIC/KERNAL would be OK
 
-; Usable RAM:  $0200-$0258 (89 bytes) / $0293-$02FF (109 bytes)
+; Usable RAM:  $0120-$0258 (313 bytes) (stack reduced to $20) / $0293-$02FF (109 bytes)
 ; Usable INIT: $03D0-$03FF (48 bytes) / $0400-$07E7 SCREEN (200 bytes 5 middle rows) / $07E8-$0800 (24 bytes)
 
 INIT=$0400 ; use this as run address for cruncher
@@ -26,6 +26,7 @@ INIT=$0400 ; use this as run address for cruncher
 !addr Tmp2=$08
 !addr ZP_RNG_LOW = $09
 !addr ZP_RNG_HIGH = $0A
+!addr Suit=$0B
 
 *=$0801
 !if DEBUG=1 {
@@ -60,16 +61,22 @@ Start:
             lda #>($0400+15*40+7)
             jsr SetCursor
 
-            lda #GREY
+            lda #3
+            sta Suit
             sta CharCol
-
             ldy #$FF
-            ldx #T_WASHERE
+            ldx #N_WANNABE
+            jsr DrawText
+            ldy #40-1
+            ldx #E_ALL_GAIN11
             jsr DrawText
 
             ldx #<($0400+4*40)
             lda #>($0400+4*40)
             jsr SetCursor
+
+            lda #GREY
+            sta CharCol
 
             ldy #0
             jsr DrawCardBack
@@ -80,42 +87,50 @@ Start:
             lda #$34
             jsr DrawCardBottomDecoration
 
+            lda #3
+            sta CharCol
+            ldy #10-2+41
+            ldx #G_WANNABE
+            jsr DrawGlyph
+
 -           jsr $FFE4 ; Get From Keyboard
             beq -
             jmp * ; prevents RUN/STOP to break
 
 
 ;----------------------------------------------------------------------------
-; TEXT DRAWING
+; BASIC DRAWING
 ;----------------------------------------------------------------------------
 
 ; draws text X at cursor + Y+1 (clobbers A,X,Y,Tmp1)
 DrawText:
 -           lda TextData,x
-            beq ++++                    ; text ends with 0
-            bpl +
+            beq +                       ; text ends with 0
             jsr DrawMacro
-            jmp ++
-+           jsr MovePutChar3F           ; C=1 if >=$40
-            bcc +++
-++          lda TextData+1,x            ; lookahead
-            beq ++++                    ; text ends directly with 0
+            lda TextData+1,x            ; lookahead
+            beq +                       ; text ends directly with 0
             lda #32                     ; put space
             jsr MovePutChar
-+++         inx
+            inx
             bne -
-++++        rts
++           rts
 
-; draws macro A ($80..$FF) at cursor + Y+1 (clobbers A,Y,Tmp1)
+; draws macro A (1..255) at cursor + Y+1 (clobbers A,Y,Tmp1)
 DrawMacro:
             stx Tmp1
-            tax                         ; A will be $80..$FF
---          lda TextMacroData-$80,x
-            jsr MovePutChar3F           ; C=1 if >=$40
-            bcs ++                      ; macros end with +$40
+            cmp #M_SUIT
+            bne +
+            ldx Suit
+            lda SuitPtrs,x
++           tax
+-           lda MacroData-1,x
+            bpl ++
+            and #$7F                    ; last character
+            ldx #$FF                    ; ends loop
+++          jsr MovePutChar
             inx
-            bne --
-++          ldx Tmp1
+            bne -
+            ldx Tmp1
             rts
 
 ; draws block X at cursor + Y+1 (clobbers A,X,Y)
@@ -127,12 +142,28 @@ DrawBlock:
             bne -
 +           rts
 
+; draws glyph X at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2)
+DrawGlyph:
+            lda #3
+            sta Tmp2
+-           jsr .put1
+            jsr .put1
+            jsr .put1
+            lda #40-3
+            jsr AddAToY
+            dec Tmp2
+            bne -
+            rts
+.put1:      lda GlyphData,x
+            inx
+            jmp MovePutChar
+
 
 ;----------------------------------------------------------------------------
 ; CARD DRAWING
 ;----------------------------------------------------------------------------
 
-; draws card background at cursor (clobbers A,X,Y,Tmp1,Tmp2)
+; draws card background at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2)
 DrawCardBack:
             ldx #B_CARDBACKTOP
             jsr DrawBlockAddModulo
@@ -145,7 +176,7 @@ DrawCardBack:
             ldx #B_CARDBACKBOTTOM
             jmp DrawBlockAddModulo
 
-; draws card top frame at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2)
+; draws card top frame with decoration in A at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2)
 DrawCardTopFrameDecorated:
             jsr DrawCardTopDecoration
             ldx #B_FRAMETOP+2
@@ -202,16 +233,12 @@ DrawCardBottomDecoration:
             pla
             and #$0F
 +           ora #$B0
-            bne MovePutChar             ; always
+            ;bne MovePutChar             ; always
 
 ;----------------------------------------------------------------------------
 ; CHARACTER DRAWING
 ;----------------------------------------------------------------------------
 
-; draws char in A at cursor+Y+1 with color CharCol (clobbers Y) and sets C=1 if A>=$40
-MovePutChar3F:
-            cmp #$40 ; C=1 if >=$40
-            and #$3F
 ; draws char in A at cursor+Y+1 with color CharCol (clobbers Y)
 MovePutChar:
             iny
@@ -245,7 +272,7 @@ MoveCursorDown:
             inc _ColorPos+1
 +           rts
 
-; draws block X at cursor + Y+1 and adds 40-(width of card frame) to Y (clobbers A,Y,Tmp1)
+; draws graphic X at cursor + Y+1 and adds 40-(width of card frame) to Y (clobbers A,Y,Tmp1)
 DrawBlockAddModulo:
             jsr DrawBlock
 ; adds 40-(width of card frame) to Y (clobbers A,Y,Tmp1)
@@ -265,7 +292,7 @@ AddAToY:
 ; HEALTH DRAWING
 ;----------------------------------------------------------------------------
 
-; draws X(0..10) as 10 high health bar in colors in A (2 nibbles) at cursor + Y+1 (clobbers A,X,Tmp1)
+; draws X(0..10) as 10 high health bar in colors in A (2 nibbles) at cursor + Y (clobbers A,X,Tmp1,cursor)
 DrawHealthBar:
             sta CharCol
             stx Tmp1
@@ -308,24 +335,17 @@ random:
 
 
 ;----------------------------------------------------------------------------
-; CARDS SoA
+; CARDS
 ;----------------------------------------------------------------------------
 
-; 1 byte LTSSCCCC : L=Legendary T=Type(0=Monster/1=Spell) SS=Suit(0,1,2,3) CCCC=Cost(0..15)
-Cards_LTSuitCost:
-    !byte 0
-; 1 byte AAAADDDD : AAAA=Attack DDDD=Defense
-Cards_AttackDefense:
-    !byte 0
-; 1 byte Name TextPtr
-Cards_Name:
-    !byte 0
-; 1 byte Effect TextPtr (also used to perform effect)
-Cards_EffectText:
-    !byte 0
-; 1 byte GlyphPtr
-Cards_Glyph:
-    !byte 0
+CARD_LTSC=0         ; 1 byte LTSSCCCC : L=Legendary T=Type(0=Monster/1=Spell) SS=Suit(0,1,2,3) CCCC=Cost(0..15)
+CARD_ATDF=1         ; 1 byte AAAADDDD : AAAA=Attack DDDD=Defense
+CARD_NAME=2         ; 1 byte Name TextPtr
+CARD_EFFECT=3       ; 1 byte Effect TextPtr (also used to perform effect)
+CARD_GLYPH=4        ; 1 byte GlyphPtr
+
+Cards:
+    !byte $80, $00, N_GOBLIN_LEADER, E_ALL_GAIN11, G_LEGND_GOBLIN
 
 
 ;----------------------------------------------------------------------------
@@ -336,46 +356,49 @@ Cards_Glyph:
 GlyphData:
     G_LEGND_GOBLIN=*-GlyphData
     !byte 73,104,85, 215,215,117, 81,73,41
+    G_WANNABE=*-GlyphData
+    !byte 127,98,126, 17,17,97, 124,251,78
 
 
 ;----------------------------------------------------------------------------
 ; TEXT
 ;----------------------------------------------------------------------------
 
-; Char=0->End, Char<$40->Put, Chars<$80->Put+Space, Chars>=$80->Macro Lookup Char-$80 (Max 255 bytes)
+; Each string is a list of MacroPtrs and ends with 0
 TextData:
-    T_WASHERE=*-TextData
-    !scr TM_POLYSTYRENE,"waShere",0
+    N_GOBLIN_LEADER=*-TextData
+    !scr M_GOBLIN,M_LEADER,0
+    N_WANNABE=*-TextData
+    !scr M_SUIT,M_WANNABE,0
+    E_ALL_GAIN11=*-TextData
+    !scr M_ALL,M_SUIT,M_GAIN11,0
 !if *-TextData >= $FF { !error "Out of TextData memory" }
 
-; Macros (Max 128 bytes) Max offset is 127, so this is really LIMITED
-TextMacroData:
-    TM_POLYSTYRENE=$80+*-TextMacroData
-    !scr "polystyrenE"
-    TM_GOBLIN=$80+*-TextMacroData
-    !scr "gobliN"
-    TM_CANDY=$80+*-TextMacroData
-    !scr "candY"
-    TM_SOAP=$80+*-TextMacroData
-    !scr "soaP"
-    TM_LEGENDARY=$80+*-TextMacroData
-    !scr "legendarY"
-!if *-TextMacroData >= $80 { !error "Out of TextMacroData memory" }
+; Text macros, each ends with a byte >= $80
+MacroData:
+    M_SUIT=2 ; is replaced by current suit name
+    M_GOBLIN      =*-MacroData+1 : !scr "gobli",'n'+$80
+    M_POLYSTYRENE =*-MacroData+1 : !scr "polystyren",'e'+$80
+    M_CANDY       =*-MacroData+1 : !scr "cand",'y'+$80
+    M_SOAP        =*-MacroData+1 : !scr "soa",'p'+$80
+    M_HARD        =*-MacroData+1 : !scr "har",'d'+$80
+    M_LEGENDARY   =*-MacroData+1 : !scr "legendar",'y'+$80
+    M_LEADER      =*-MacroData+1 : !scr "leade",'r'+$80
+    M_WANNABE     =*-MacroData+1 : !scr "wannab",'e'+$80
+    M_ALL         =*-MacroData+1 : !scr "al",'l'+$80
+    M_GAIN11      =*-MacroData+1 : !scr "gain ",78,'1',83,'1'+$80
+!if *-MacroData >= $FF { !error "Out of MacroData memory" }
 
-; Plain text blocks (Max 255 bytes)
+; Graphic blocks, each ends with 0
 BlockData:
-    B_FRAMETOP=*-BlockData
-    !byte 79,119,119,119,80,0
-    B_FRAMEBOTTOM=*-BlockData
-    !byte 76,111,111,111,122,0
-    B_SPACEHEART=*-BlockData
-    !byte 160,211,0
-    B_CARDBACKTOP=*-BlockData
-    !byte 236,192,192,192,251,0
-    B_CARDBACKMIDDLE=*-BlockData
-    !byte 194,102,102,102,194,0
-    B_CARDBACKBOTTOM=*-BlockData
-    !byte 252,192,192,192,254,0
+    B_FRAMETOP             =*-BlockData : !byte 79,119,119,119,80,0
+    B_FRAMEBOTTOM          =*-BlockData : !byte 76,111,111,111,122,0
+    B_SPACEHEART           =*-BlockData : !byte 160,211,0
+    B_CARDBACKTOP          =*-BlockData : !byte 236,192,192,192,251,0
+    B_SHADEDCARDBACKMIDDLE =*-BlockData : !scr ':'
+    B_CARDBACKMIDDLE       =*-BlockData : !byte 194,102,102,102,194,0
+    B_SHADEDCARDBACKBOTTOM =*-BlockData : !scr ':'
+    B_CARDBACKBOTTOM       =*-BlockData : !byte 252,192,192,192,254,0
 !if *-BlockData >= $FF { !error "Out of BlockData memory" }
 
 SIZEOF_TEXT=*-TextData
@@ -416,13 +439,16 @@ SIZEOF_TEXT=*-TextData
 ;----------------------------------------------------------------------------
 ; DATA (03D0-03FF)
 ;----------------------------------------------------------------------------
-            !fill $30,0 ; FREE RAM AT $03D0-$0400
+SuitPtrs:
+    !byte M_GOBLIN,M_POLYSTYRENE,M_CANDY,M_SOAP
+
+    !fill $30-(*-SuitPtrs),0
 
 ;----------------------------------------------------------------------------
 ; INIT CODE (0400-07FF)
 ;----------------------------------------------------------------------------
 !pseudopc $0400 {
-            ; TODO add PETSCII logo here in the upper rows?
+            ; TODO add PETSCII logo here in the upper rows? (or just draw text?)
             ; INIT CODE
 REALINIT:
 !if INIT != REALINIT { !error "REALINIT=", REALINIT, " so update INIT and make file!" }
@@ -438,6 +464,10 @@ REALINIT:
             ; lock uppercase
             lda #$80
             sta $0291
+
+            ; move stack down to gain extra room from $120
+            ldx #$1f
+            txs
 
             jmp Start
 }
