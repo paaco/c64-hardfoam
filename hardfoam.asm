@@ -20,6 +20,7 @@ INIT=$0400 ; use this as run address for cruncher
 ;!source "constants.inc" ; older acme doesn't support same-dir includes
 BLACK=0
 BLUE=6
+LIGHT_RED=10
 GREY=12
 
 ; ZP addresses
@@ -31,6 +32,15 @@ GREY=12
 !addr ZP_RNG_LOW = $09
 !addr ZP_RNG_HIGH = $0A
 !addr Suit=$0B
+; player data (consecutive)
+!addr PlayerData=$10
+; structure offsets
+PLAYER_LIFE=0       ; 0 .. 10
+PLAYER_ENERGY=1     ; 0 .. 9
+PLAYER_MAXENERGY=2  ; 0 .. 9
+PLAYER_DECKREMAIN=3 ; DECKSIZE-1 .. 0
+!addr AIData=$14
+; TODO hand 7 bytes, table 5 * 4 bytes (card#,atd,def,status), deck (7 * 4 bytes, 1 byte per card)
 
 *=$0801
 !if DEBUG=1 {
@@ -43,46 +53,45 @@ Start:
             ; upper player has 7 health
             ldx #<($0400+39)
             lda #>($0400+39)
-            jsr SetCursor
+            jsr SetCursorY0
             lda #10
             sec
             sbc #7
             tax
             lda #$0A
-            ldy #0
             jsr DrawHealthBar
 
             ; lower player has 4 health
             ldx #<($0400+15*40+39)
             lda #>($0400+15*40+39)
-            jsr SetCursor
+            jsr SetCursorY0
             ldx #4
             lda #$A0
-            ldy #0
             jsr DrawHealthBar
 
             ldx #<($0400+15*40+7)
             lda #>($0400+15*40+7)
-            jsr SetCursor
+            jsr SetCursorY0
 
             lda #3
             sta Suit
             sta CharCol
-            ldy #$FF
             ldx #N_WANNABE
             jsr DrawText
-            ldy #40-1
+            ldy #40
             ldx #E_ALL_GAIN11
             jsr DrawText
-
-            ldx #<($0400+4*40)
-            lda #>($0400+4*40)
-            jsr SetCursor
 
             lda #GREY
             sta CharCol
 
-            ldy #0
+            jsr DrawStackSides
+            jsr ClearUpperLines
+            jsr ClearLowerLines
+
+            ldx #<($0400+4*40)
+            lda #>($0400+4*40)
+            jsr SetCursorY0
             jsr DrawCardBack
 
             ldy #10-2
@@ -97,9 +106,74 @@ Start:
             ldx #G_WANNABE
             jsr DrawGlyph
 
+            jsr DrawCounters
+
 -           jsr $FFE4 ; Get From Keyboard
             beq -
             jmp * ; prevents RUN/STOP to break
+
+
+;----------------------------------------------------------------------------
+; UI DRAWING
+;----------------------------------------------------------------------------
+
+; draws 2 lines left of the card backs to simulate the stack (this stays the same during the game)
+DrawStackSides:
+            ldx #<($0400+3*40)
+            lda #>($0400+3*40)
+            jsr SetCursor
+            ldy #0
+            lda #112
+            jsr .put2
+            lda #32
+            jsr PutCharMoveDown
+            ldx #<($0400+15*40)
+            lda #>($0400+15*40)
+            jsr SetCursor
+            lda #32
+            jsr .put2
+            lda #109
+            jmp PutCharMoveDown
+            ; common logic
+.put2:      jsr PutCharMoveDown
+            ldx #5
+-           lda #66
+            jsr PutCharMoveDown
+            dex
+            bne -
+            rts
+
+; clears the two lower lines - starts the upper with 4 line chars (clobbers A,X,Y)
+ClearLowerLines:
+            ldx #<($0400+21*40)
+            lda #>($0400+21*40)
+            jsr SetCursorY0
+            jsr .lines
+            ldx #0
+            jmp .spaces
+
+; clears two lines upper lines - starts the lower with 4 line chars (clobbers A,X,Y)
+ClearUpperLines:
+            ldx #<($0400+2*40)
+            lda #>($0400+2*40)
+            jsr SetCursorY0
+            ldx #0
+            jsr .spaces
+            ; fall through
+.lines:     ldx #0
+-           lda #67 ; line
+            jsr MovePutChar
+            inx
+            cpx #4
+            bne -
+.spaces:    lda #32 ; space
+            jsr MovePutChar
+            inx
+            cpx #38
+            bne .spaces
+            iny
+            iny
+            rts
 
 
 ;----------------------------------------------------------------------------
@@ -255,6 +329,9 @@ PutChar:
             pla
             rts
 
+; puts cursor at X/A X=low byte, A=high byte and sets Y=0 (clobbers A,Y)
+SetCursorY0:
+            ldy #0
 ; puts cursor at X/A X=low byte, A=high byte (clobbers A)
 SetCursor:
             stx _CursorPos
@@ -264,6 +341,9 @@ SetCursor:
             sta _ColorPos+1
             rts
 
+; moves cursor down and draws char in A at cursor+Y with color CharCol (clobbers A)
+PutCharMoveDown:
+            jsr PutChar
 ; moves cursor down a row (clobbers A)
 MoveCursorDown:
             lda _CursorPos
@@ -309,12 +389,42 @@ DrawHealthBar:
             lsr CharCol
             lsr CharCol
 +           lda #$53 ; heart
-            jsr PutChar
-            jsr MoveCursorDown
+            jsr PutCharMoveDown
             dex
             bne -
             rts
 
+; draws energy and deck counters (fixed places)
+; TODO: using just screen memory instead of also in ZP might be shorter; bad part is that its not indexable
+DrawCounters:
+            lda PlayerData+PLAYER_ENERGY
+            lda #7
+            ora #$30
+            sta $0400+24*40
+            lda PlayerData+PLAYER_MAXENERGY
+            lda #9
+            ora #$30
+            sta $0400+24*40+2
+            lda PlayerData+PLAYER_DECKREMAIN ; >10
+            lda #29
+            jsr AtoASCII2
+            stx $0400+23*40
+            sta $0400+23*40+1
+            rts
+
+;Converts .A to 3 ASCII/PETSCII digits: .Y = hundreds, .X = tens, .A = ones
+AtoASCII2:
+            ; ldy #$2f
+            ldx #$3a
+            sec
+-           ; iny
+            sbc #100
+            ; bcs -
+-           dex
+            adc #10
+            bmi -
+            adc #$2f
+            rts
 
 ;----------------------------------------------------------------------------
 ; prng
@@ -350,6 +460,7 @@ CARD_GLYPH=4        ; 1 byte GlyphPtr
 
 Cards:
     !byte $80, $00, N_GOBLIN_LEADER, E_ALL_GAIN11, G_LEGND_GOBLIN
+    !byte $00, $00, N_WANNABE,       T_NONE,       G_WANNABE
 
 
 ;----------------------------------------------------------------------------
@@ -371,7 +482,9 @@ GlyphData:
 ; Each string is a list of MacroPtrs and ends with 0
 TextData:
     N_GOBLIN_LEADER=*-TextData
-    !scr M_GOBLIN,M_LEADER,0
+    !scr M_GOBLIN,M_LEADER
+    T_NONE=*-TextData
+    !scr 0
     N_WANNABE=*-TextData
     !scr M_SUIT,M_WANNABE,0
     E_ALL_GAIN11=*-TextData
@@ -389,8 +502,10 @@ MacroData:
     M_LEGENDARY   =*-MacroData+1 : !scr "legendar",'y'+$80
     M_LEADER      =*-MacroData+1 : !scr "leade",'r'+$80
     M_WANNABE     =*-MacroData+1 : !scr "wannab",'e'+$80
+    M_FOAM        =*-MacroData+1 : !scr "foa",'m'+$80
     M_ALL         =*-MacroData+1 : !scr "al",'l'+$80
     M_GAIN11      =*-MacroData+1 : !scr "gain ",78,'1',83,'1'+$80
+    M_TWAINPAIN   =*-MacroData+1 : !scr "twain pain game",'s'+$80
 !if *-MacroData >= $FF { !error "Out of MacroData memory" }
 
 ; Graphic blocks, each ends with 0
@@ -472,6 +587,19 @@ REALINIT:
             ; move stack down to gain extra room from $120
             ldx #$1f
             txs
+
+            ; TODO: D000+, D400+ and D800+ inits are fine here
+
+            ; set color of counters
+            ldx #2
+-           lda #LIGHT_RED
+            sta $D800,x
+            sta $D800+24*40,x
+            lda #GREY
+            sta $D800+40,x
+            sta $D800+23*40,x
+            dex
+            bpl -
 
             jmp Start
 }
