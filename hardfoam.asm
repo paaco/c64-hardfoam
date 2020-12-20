@@ -1,22 +1,26 @@
 ; HARD FOAM - a 2K card game
 ; Developed for the https://itch.io/jam/the-c64-cassette-50-charity-competition
 
-; Only WRITES memory < $1000 and uses Dxxx IO, KERNAL and BASIC calls
+; Only WRITES memory < $1000 and uses Dxxx IO, calling/reading KERNAL/BASIC is OK
 
 ; Note that it is only required to load below $1000, not specifically $0801,
 ; so we could even load at $0400 (not lower to keep Tape loading compatibility)
 ; However, loading it there (anything below $0801) will kill RUN, only allow direct SYS
 ; Exomizer also uses $0334-$03D0 as decrunching buffer; decrunching there will hang
-; AND: we may only WRITE <$1000, so reading BASIC/KERNAL would be OK
 
-; Usable RAM:  $0120-$0258 (313 bytes) (stack reduced to $20) / $0293-$02FF (109 bytes)
+; Without packer it's possible to load and run $120-$1000 giving 3808 bytes instead of 2047 packed
+
+; Usable RAM:  $0120-$0276 (343 bytes) (stack reduced to $20) / $0293-$02FF (109 bytes)
 ; Usable INIT: $03D0-$03FF (48 bytes) / $0400-$07E7 SCREEN (200 bytes 5 middle rows) / $07E8-$0800 (24 bytes)
 
 INIT=$0400 ; use this as run address for cruncher
 
 !ifndef DEBUG {DEBUG=1}
 
-!source "constants.inc"
+;!source "constants.inc" ; older acme doesn't support same-dir includes
+BLACK=0
+BLUE=6
+GREY=12
 
 ; ZP addresses
 !addr CharCol=$02
@@ -457,7 +461,7 @@ REALINIT:
             ; setup VIC
             lda #BLACK
             sta $D020
-            lda #BROWN
+            lda #BLUE
             sta $D021
             lda #20 ; default uppercase
             sta $D018
