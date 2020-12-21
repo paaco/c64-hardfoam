@@ -22,6 +22,13 @@ BLACK=0
 BLUE=6
 LIGHT_RED=10
 GREY=12
+; colors
+COL_BORDER=BLACK
+COL_SCREEN=BLUE
+COL_HEALTH_ON=LIGHT_RED
+COL_HEALTH_OFF=BLACK
+COL_PLAIN=GREY
+CHR_SPACE=32+DEBUG*10 ; space or star
 
 ; ZP addresses
 !addr CharCol=$02
@@ -34,12 +41,13 @@ GREY=12
 !addr Suit=$0B
 ; player data (consecutive)
 !addr PlayerData=$10
-; structure offsets
-PLAYER_LIFE=0       ; 0 .. 10
-PLAYER_ENERGY=1     ; 0 .. 9
-PLAYER_MAXENERGY=2  ; 0 .. 9
-PLAYER_DECKREMAIN=3 ; DECKSIZE-1 .. 0
-!addr AIData=$14
+    PD_LIFE=0       ; 0 .. 10
+    PD_ENERGY=1     ; $30 .. $39
+    ; fixed '/' character in between
+    PD_MAXENERGY=3  ; $30 .. $39
+    PD_REMAIN=4     ; DECKSIZE-1 .. 0
+SIZEOF_PD=5
+!addr AIData=$10+SIZEOF_PD
 ; TODO hand 7 bytes, table 5 * 4 bytes (card#,atd,def,status), deck (7 * 4 bytes, 1 byte per card)
 
 *=$0801
@@ -50,24 +58,9 @@ PLAYER_DECKREMAIN=3 ; DECKSIZE-1 .. 0
 
 ; 2049 in DEBUG=0 mode, so use Exomizer to run from $0801
 Start:
-            ; upper player has 7 health
-            ldx #<($0400+39)
-            lda #>($0400+39)
-            jsr SetCursorY0
-            lda #10
-            sec
-            sbc #7
-            tax
-            lda #$0A
-            jsr DrawHealthBar
+            jsr InitPlayersData
 
-            ; lower player has 4 health
-            ldx #<($0400+15*40+39)
-            lda #>($0400+15*40+39)
-            jsr SetCursorY0
-            ldx #4
-            lda #$A0
-            jsr DrawHealthBar
+            jsr DrawHealthBars
 
             ldx #<($0400+15*40+7)
             lda #>($0400+15*40+7)
@@ -114,6 +107,20 @@ Start:
 
 
 ;----------------------------------------------------------------------------
+; GAME FUNCTIONS
+;----------------------------------------------------------------------------
+
+InitPlayersData:
+            ldx #SIZEOF_PD-1
+-           lda InitData,x
+            sta PlayerData,x
+            sta AIData,x
+            dex
+            bpl -
+            rts
+
+
+;----------------------------------------------------------------------------
 ; UI DRAWING
 ;----------------------------------------------------------------------------
 
@@ -125,12 +132,12 @@ DrawStackSides:
             ldy #0
             lda #112
             jsr .put2
-            lda #32
+            lda #CHR_SPACE
             jsr PutCharMoveDown
             ldx #<($0400+15*40)
             lda #>($0400+15*40)
             jsr SetCursor
-            lda #32
+            lda #CHR_SPACE
             jsr .put2
             lda #109
             jmp PutCharMoveDown
@@ -166,13 +173,88 @@ ClearUpperLines:
             inx
             cpx #4
             bne -
-.spaces:    lda #32 ; space
+.spaces:    lda #CHR_SPACE
             jsr MovePutChar
             inx
             cpx #38
             bne .spaces
             iny
             iny
+            rts
+
+; draws both health bars
+DrawHealthBars:
+            ; upper player
+            ldx #<($0400+39)
+            lda #>($0400+39)
+            jsr SetCursorY0
+            lda #10
+            sec
+            sbc AIData+PD_LIFE
+            tax
+            lda #COL_HEALTH_OFF * 16 + COL_HEALTH_ON
+            jsr .healthbar
+
+            ; lower player
+            ldx #<($0400+15*40+39)
+            lda #>($0400+15*40+39)
+            jsr SetCursorY0
+            ldx PlayerData+PD_LIFE
+            lda #COL_HEALTH_ON * 16 + COL_HEALTH_OFF
+            ; fall through
+
+; draws X(0..10) as 10 high health bar in colors in A (2 nibbles) at cursor + Y (clobbers A,X,Tmp1,cursor)
+.healthbar:
+            sta CharCol
+            stx Tmp1
+            ldx #10
+-           cpx Tmp1
+            bne +
+            ; switch to second color
+            lsr CharCol
+            lsr CharCol
+            lsr CharCol
+            lsr CharCol
++           lda #$53 ; heart
+            jsr PutCharMoveDown
+            dex
+            bne -
+            rts
+
+; draws energy and deck counters (fixed places)
+DrawCounters:
+            ; energy
+            ldx #2
+-           lda AIData+PD_ENERGY,x
+            sta $0400,x
+            lda PlayerData+PD_ENERGY,x
+            sta $0400+24*40,x
+            dex
+            bpl -
+            lda AIData+PD_REMAIN
+            lda #23
+            jsr AtoASCII2
+            stx $0400+1*40
+            sta $0400+1*40+1
+            lda PlayerData+PD_REMAIN
+            lda #77
+            jsr AtoASCII2
+            stx $0400+23*40
+            sta $0400+23*40+1
+            rts
+
+; Converts .A to 3 ASCII/PETSCII digits: .Y = hundreds, .X = tens, .A = ones
+AtoASCII2:
+            ; ldy #$2f
+            ldx #$3a
+            sec
+-           ; iny
+            sbc #100
+            ; bcs -
+-           dex
+            adc #10
+            bmi -
+            adc #$2f
             rts
 
 
@@ -187,7 +269,7 @@ DrawText:
             jsr DrawMacro
             lda TextData+1,x            ; lookahead
             beq +                       ; text ends directly with 0
-            lda #32                     ; put space
+            lda #CHR_SPACE
             jsr MovePutChar
             inx
             bne -
@@ -373,64 +455,10 @@ AddAToY:
 
 
 ;----------------------------------------------------------------------------
-; HEALTH DRAWING
-;----------------------------------------------------------------------------
-
-; draws X(0..10) as 10 high health bar in colors in A (2 nibbles) at cursor + Y (clobbers A,X,Tmp1,cursor)
-DrawHealthBar:
-            sta CharCol
-            stx Tmp1
-            ldx #10
--           cpx Tmp1
-            bne +
-            ; switch to second color
-            lsr CharCol
-            lsr CharCol
-            lsr CharCol
-            lsr CharCol
-+           lda #$53 ; heart
-            jsr PutCharMoveDown
-            dex
-            bne -
-            rts
-
-; draws energy and deck counters (fixed places)
-; TODO: using just screen memory instead of also in ZP might be shorter; bad part is that its not indexable
-DrawCounters:
-            lda PlayerData+PLAYER_ENERGY
-            lda #7
-            ora #$30
-            sta $0400+24*40
-            lda PlayerData+PLAYER_MAXENERGY
-            lda #9
-            ora #$30
-            sta $0400+24*40+2
-            lda PlayerData+PLAYER_DECKREMAIN ; >10
-            lda #29
-            jsr AtoASCII2
-            stx $0400+23*40
-            sta $0400+23*40+1
-            rts
-
-;Converts .A to 3 ASCII/PETSCII digits: .Y = hundreds, .X = tens, .A = ones
-AtoASCII2:
-            ; ldy #$2f
-            ldx #$3a
-            sec
--           ; iny
-            sbc #100
-            ; bcs -
--           dex
-            adc #10
-            bmi -
-            adc #$2f
-            rts
-
-;----------------------------------------------------------------------------
 ; prng
 ;----------------------------------------------------------------------------
 
-; RANDOM routine from https://codebase64.org/doku.php?id=base:16bit_xorshift_random_generator
+; RANDOM routine from https://codebase64.org/ 16bit eor shift random generator
 ; the RNG. You can get 8-bit random numbers in A or 16-bit numbers
 ; from the zero page addresses. Leaves X/Y unchanged.
 random:
@@ -561,6 +589,11 @@ SIZEOF_TEXT=*-TextData
 SuitPtrs:
     !byte M_GOBLIN,M_POLYSTYRENE,M_CANDY,M_SOAP
 
+; empty PlayerData structure
+InitData:
+    !scr 10, "0/0", 28
+!if *-InitData != SIZEOF_PD { !error "InitData not up to date" }
+
     !fill $30-(*-SuitPtrs),0
 
 ;----------------------------------------------------------------------------
@@ -574,9 +607,9 @@ REALINIT:
             cld ; who knows?
 
             ; setup VIC
-            lda #BLACK
+            lda #COL_BORDER
             sta $D020
-            lda #BLUE
+            lda #COL_SCREEN
             sta $D021
             lda #20 ; default uppercase
             sta $D018
@@ -592,10 +625,10 @@ REALINIT:
 
             ; set color of counters
             ldx #2
--           lda #LIGHT_RED
+-           lda #COL_HEALTH_ON
             sta $D800,x
             sta $D800+24*40,x
-            lda #GREY
+            lda #COL_PLAIN
             sta $D800+40,x
             sta $D800+23*40,x
             dex
@@ -603,4 +636,7 @@ REALINIT:
 
             jmp Start
 }
-!fill $0800-(*&$0FFF),$20
+!fill $0400+10*40-(*&$0FFF),0
+; put 200 bytes data here
+!fill 40*5,34
+!fill $0800-(*&$0FFF),0
