@@ -19,7 +19,11 @@ INIT=$0400 ; use this as run address for cruncher
 
 ;!source "constants.inc" ; older acme doesn't support same-dir includes
 BLACK=0
+WHITE=1
+GREEN=5
 BLUE=6
+YELLOW=7
+ORANGE=8
 LIGHT_RED=10
 GREY=12
 ; colors
@@ -28,6 +32,11 @@ COL_SCREEN=BLUE
 COL_HEALTH_ON=LIGHT_RED
 COL_HEALTH_OFF=BLACK
 COL_PLAIN=GREY
+COL_LEGEND=YELLOW
+COL_DISABLED=ORANGE
+COL_SELECTED=WHITE
+COL_HIGHER=GREEN
+COL_LOWER=LIGHT_RED
 CHR_SPACE=32+DEBUG*10 ; space or star
 
 ; ZP addresses
@@ -39,6 +48,8 @@ CHR_SPACE=32+DEBUG*10 ; space or star
 !addr ZP_RNG_LOW = $09
 !addr ZP_RNG_HIGH = $0A
 !addr Suit=$0B
+!addr CardIdx=$0C
+!addr TableIdx=$0D
 ; player data (consecutive)
 !addr PlayerData=$10
     PD_LIFE=0       ; 0 .. 10
@@ -46,7 +57,14 @@ CHR_SPACE=32+DEBUG*10 ; space or star
     ; fixed '/' character in between
     PD_MAXENERGY=3  ; $30 .. $39
     PD_REMAIN=4     ; DECKSIZE-1 .. 0
-SIZEOF_PD=5
+    PD_HAND=5       ; 7 bytes (card#), >=$80=no card
+    PD_TABLE=12     ; 20 bytes 5*4 bytes (card#,atd,def,status)
+      CD_CARD=0     ; card# >=$80=no card
+      CD_ATK=1      ; attack
+      CD_DEF=2      ; defense
+      CD_STATUS=3   ; status: 0=untapped, <>0=tapped
+      SIZEOF_CD=4
+SIZEOF_PD=32
 !addr AIData=$10+SIZEOF_PD
 ; TODO hand 7 bytes, table 5 * 4 bytes (card#,atd,def,status), deck (7 * 4 bytes, 1 byte per card)
 
@@ -61,23 +79,10 @@ Start:
             jsr InitPlayersData
 
             jsr DrawHealthBars
-
-            ldx #<($0400+15*40+7)
-            lda #>($0400+15*40+7)
-            jsr SetCursorY0
-
-            lda #3
-            sta Suit
-            sta CharCol
-            ldx #N_WANNABE
-            jsr DrawText
-            ldy #40
-            ldx #E_ALL_GAIN11
-            jsr DrawText
+            jsr DrawCounters
 
             lda #GREY
             sta CharCol
-
             jsr DrawStackSides
             jsr ClearUpperLines
             jsr ClearLowerLines
@@ -87,19 +92,26 @@ Start:
             jsr SetCursorY0
             jsr DrawCardBack
 
-            ldy #10-2
-            lda #%01000110
-            jsr DrawCardTopFrameDecorated
-            lda #$34
-            jsr DrawCardBottomDecoration
+            ldx #<($0400+15*40)
+            lda #>($0400+15*40)
+            jsr SetCursorY0
+            lda #5 ; card# (goes per 5)
+            jsr DrawCard
 
+            ldx #<($0400+15*40+8)
+            lda #>($0400+15*40+8)
+            jsr SetCursorY0
+            ldx #PlayerData+PD_TABLE ; zP offset into table (increases per 4)
+            ; setup card on table
+            lda #0 ; card# (goes per 5)
+            sta CD_CARD,x
+            lda #0 ; tapped=1
+            sta CD_STATUS,x
             lda #3
-            sta CharCol
-            ldy #10-2+41
-            ldx #G_WANNABE
-            jsr DrawGlyph
-
-            jsr DrawCounters
+            sta CD_ATK,x
+            lda #1
+            sta CD_DEF,x
+            jsr DrawTableCard
 
 -           jsr $FFE4 ; Get From Keyboard
             beq -
@@ -182,7 +194,7 @@ ClearUpperLines:
             iny
             rts
 
-; draws both health bars
+; draws both health bars (clobbers A,X,Y,Tmp1,cursor)
 DrawHealthBars:
             ; upper player
             ldx #<($0400+39)
@@ -194,7 +206,6 @@ DrawHealthBars:
             tax
             lda #COL_HEALTH_OFF * 16 + COL_HEALTH_ON
             jsr .healthbar
-
             ; lower player
             ldx #<($0400+15*40+39)
             lda #>($0400+15*40+39)
@@ -221,7 +232,7 @@ DrawHealthBars:
             bne -
             rts
 
-; draws energy and deck counters (fixed places)
+; draws energy and deck counters (clobbers A,X,Y)
 DrawCounters:
             ; energy
             ldx #2
@@ -231,13 +242,12 @@ DrawCounters:
             sta $0400+24*40,x
             dex
             bpl -
+            ; deck counters
             lda AIData+PD_REMAIN
-            lda #23
             jsr AtoASCII2
             stx $0400+1*40
             sta $0400+1*40+1
             lda PlayerData+PD_REMAIN
-            lda #77
             jsr AtoASCII2
             stx $0400+23*40
             sta $0400+23*40+1
@@ -255,7 +265,12 @@ AtoASCII2:
             adc #10
             bmi -
             adc #$2f
-            rts
+            ; <10 "9 "
+            cpx #$30
+            bne +
+            tax
+            lda #CHR_SPACE
++           rts
 
 
 ;----------------------------------------------------------------------------
@@ -281,7 +296,7 @@ DrawMacro:
             cmp #M_SUIT
             bne +
             ldx Suit
-            lda SuitPtrs,x
+            lda SuitTextData,x
 +           tax
 -           lda MacroData-1,x
             bpl ++
@@ -302,26 +317,103 @@ DrawBlock:
             bne -
 +           rts
 
-; draws glyph X at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2)
+; draws glyph X at cursor + Y+1 (clobbers A,X,Y,Tmp2)
 DrawGlyph:
             lda #3
             sta Tmp2
--           jsr .put1
-            jsr .put1
-            jsr .put1
-            lda #40-3
+-           lda GlyphData1,x
+            jsr MovePutChar
+            lda #40
             jsr AddAToY
+            lda GlyphData2,x
+            jsr PutChar
+            lda #40
+            jsr AddAToY
+            lda GlyphData3,x
+            jsr PutChar
+            lda #256-80 ; return to top of glyph
+            jsr AddAToY
+            inx
             dec Tmp2
             bne -
-            rts
-.put1:      lda GlyphData,x
-            inx
-            jmp MovePutChar
+.stealrts1: rts
 
 
 ;----------------------------------------------------------------------------
 ; CARD DRAWING
 ;----------------------------------------------------------------------------
+
+; draws card on table in X at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2,TableIdx)
+; - draws status border, no decoration and highlighted attack/defense
+DrawTableCard:
+            stx TableIdx
+            lda CD_CARD,x
+            sta CardIdx
+            tax
+            lda Cards+CARD_LTSC,x
+            jsr SetFrameCharCol
+            lda #<PutChar                       ; enable color write
+            sta .drawvaluefixup1
+            ; use disabled color when tapped
+            ldx TableIdx
+            lda CD_STATUS,x             ; 0=untapped, <>0=tapped
+            beq +
+            lda #COL_DISABLED
+            sta CharCol
+            lda #<PutCharNoColor        ; disable color write
+            sta .drawvaluefixup1
++           jsr DrawCardTopFrame
+            jsr .drawcard1              ; draw remainder of card
+            ; overwrite card values with actuals
+            lda #40*4-2
+            jsr AddAToY
+            ; update attack value
+            ldx TableIdx
+            jsr .drawvalue
+            ; update defense value
+            inx ; CAREFUL: THIS ASSUMES DEFENSE COMES DIRECTLY AFTER ATTACK IN MEMORY
+            iny
+            iny
+            iny
+            ; fall through
+; common code to read screen to determine high/low/same, X=table index
+.drawvalue:
+            lda (_CursorPos),y
+            and #$0F
+            cmp CD_ATK,x                ; CARDATK-ACTUALATK Z=1:equal, C=1 actual<card C=0 actual>card
+            beq .stealrts1              ; done
+            bcc .higher
+            lda #COL_LOWER
+            bne +                       ; always
+.higher:    lda #COL_HIGHER
++           sta CharCol
+            lda CD_ATK,x
+            ora #$30                    ; regular digits
+            .drawvaluefixup1=*+1        ; make jsr switchable between PutChar and PutCharNoColor
+            jmp PutChar
+
+; draws decorated card in A at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2,CardIdx)
+; - draws legend border, full decoration and default attack/defense
+DrawCard:
+            sta CardIdx
+            tax
+            lda Cards+CARD_LTSC,x
+            jsr SetFrameCharCol
+            ldx CardIdx
+            lda Cards+CARD_LTSC,x
+            jsr DrawCardTopFrameDecorated
+.drawcard1: ldx CardIdx
+            lda Cards+CARD_ATDF,x               ; card values not actuals
+            jsr DrawCardBottomDecoration
+            lda #92                             ; move to glyph position
+            jsr AddAToY
+            ldx CardIdx
+            lda Cards+CARD_LTSC,x
+            jsr SetSuitCharCol
+            sta CharCol
+            lda Cards+CARD_GLYPH,x
+            tax
+            jmp DrawGlyph
 
 ; draws card background at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2)
 DrawCardBack:
@@ -392,8 +484,8 @@ DrawCardBottomDecoration:
             jsr DrawBlock
             pla
             and #$0F
-+           ora #$B0
-            ;bne MovePutChar             ; always
++           ora #$B0                    ; reversed digit
+            ; fall through to MovePutChar
 
 ;----------------------------------------------------------------------------
 ; CHARACTER DRAWING
@@ -404,12 +496,15 @@ MovePutChar:
             iny
 ; draws char in A at cursor+Y with color CharCol
 PutChar:
-            sta (_CursorPos),y
             pha
             lda CharCol
             sta (_ColorPos),y
             pla
+; draws char in A at cursor+Y
+PutCharNoColor:
+            sta (_CursorPos),y
             rts
+!if (>PutChar != >PutCharNoColor) { !error "PutChar and PutCharNoColor should be in same page" }
 
 ; puts cursor at X/A X=low byte, A=high byte and sets Y=0 (clobbers A,Y)
 SetCursorY0:
@@ -453,6 +548,25 @@ AddAToY:
             tay
             rts
 
+; convert LTSC value in A to frame color (legend/plain) and sets CharCol (clobber A)
+SetFrameCharCol:
+            and #$80
+            beq + ; plain
+            lda #COL_LEGEND
+            bne ++
++           lda #COL_PLAIN
+++          sta CharCol
+            rts
+
+; convert LTSC value in A to suit color and sets CharCol (clobbers A)
+SetSuitCharCol:
+            lsr
+            lsr
+            lsr
+            lsr
+            and #$03
+            sta CharCol
+            rts
 
 ;----------------------------------------------------------------------------
 ; prng
@@ -487,20 +601,26 @@ CARD_EFFECT=3       ; 1 byte Effect TextPtr (also used to perform effect)
 CARD_GLYPH=4        ; 1 byte GlyphPtr
 
 Cards:
-    !byte $80, $00, N_GOBLIN_LEADER, E_ALL_GAIN11, G_LEGND_GOBLIN
-    !byte $00, $00, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $83, $32, N_GOBLIN_LEADER, E_ALL_GAIN11, G_LEGND_GOBLIN
+    !byte $01, $12, N_WANNABE,       T_NONE,       G_WANNABE
 
 
 ;----------------------------------------------------------------------------
 ; GLYPHS
 ;----------------------------------------------------------------------------
 
-; 8*4 glyphs * 9 bytes = 288 bytes; 28 glyphs would be 28*9=252
-GlyphData:
-    G_LEGND_GOBLIN=*-GlyphData
-    !byte 73,104,85, 215,215,117, 81,73,41
-    G_WANNABE=*-GlyphData
-    !byte 127,98,126, 17,17,97, 124,251,78
+; glyphs, 3 bytes per row = max 252/3 = 84 glyphs
+GlyphData1:
+    G_LEGND_GOBLIN=*-GlyphData1
+    !byte 73,104,85
+    G_WANNABE=*-GlyphData1
+    !byte 127,98,126
+GlyphData2:
+    !byte 215,215,117
+    !byte 17,17,97
+GlyphData3:
+    !byte 81,73,41
+    !byte 124,251,78
 
 
 ;----------------------------------------------------------------------------
@@ -586,15 +706,17 @@ SIZEOF_TEXT=*-TextData
 ;----------------------------------------------------------------------------
 ; DATA (03D0-03FF)
 ;----------------------------------------------------------------------------
-SuitPtrs:
+SuitTextData:
     !byte M_GOBLIN,M_POLYSTYRENE,M_CANDY,M_SOAP
 
 ; empty PlayerData structure
 InitData:
-    !scr 10, "0/0", 28
+    !scr 10, "0/0", 0
+    !fill 7,$FF ; empty hand
+    !fill 5*4,$FF ; empty table
 !if *-InitData != SIZEOF_PD { !error "InitData not up to date" }
 
-    !fill $30-(*-SuitPtrs),0
+    !fill $30-(*-SuitTextData),0
 
 ;----------------------------------------------------------------------------
 ; INIT CODE (0400-07FF)
@@ -607,12 +729,18 @@ REALINIT:
             cld ; who knows?
 
             ; setup VIC
+            lda #%10011011              ; screen on
+            sta $D011
+            lda #0                      ; no sprites
+            sta $D015
+            lda #%00001000              ; hires
+            sta $D016
+            lda #20                     ; uppercase
+            sta $D018
             lda #COL_BORDER
             sta $D020
             lda #COL_SCREEN
             sta $D021
-            lda #20 ; default uppercase
-            sta $D018
             ; lock uppercase
             lda #$80
             sta $0291
