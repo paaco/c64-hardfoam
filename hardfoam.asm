@@ -122,7 +122,7 @@ Start:
             ; setup card on table
             lda #5 ; card# (goes per 5)
             sta CD_CARD+4,x
-            sta CD_CARD+8,x
+            ;sta CD_CARD+8,x
             sta CD_CARD+12,x
             sta CD_CARD+16,x
             lda #$00 ; tapped=1,selected=$80
@@ -138,6 +138,13 @@ Start:
             jsr SetCursorY0
             ldx #PlayerData+PD_TABLE ; zP offset into table (increases per 4)
             jsr DrawTable
+            ldy #6*4
+            jsr DrawCardSelect
+            ldy #0
+            lda #BLACK
+            sta CharCol
+            lda #102
+            jsr FillCard
 
 -           jsr $FFE4 ; Get From Keyboard
             beq -
@@ -298,6 +305,38 @@ AtoASCII2:
             lda #CHR_SPACE
 +           rts
 
+; clears the size of a card at cursor + Y+1 (clobbers A,X,Y,Tmp1)
+ClearCard:
+            lda #CHR_SPACE
+; fills the size of a card with A at cursor + Y+1 (clobbers A,X,Y,Tmp1)
+FillCard:
+            ldx #6
+            stx Tmp2
+--          ldx #5
+-           jsr MovePutChar
+            dex
+            bne -
+            pha
+            jsr AddFrameModuloToY
+            pla
+            dec Tmp2
+            bne --
+            rts
+
+; draws card selection symbols around a card at cursor + Y+1 (clobbers A,X,Y,Tmp1)
+; - cursor + Y+1 is assumed to be top-left of card
+DrawCardSelect:
+            lda #COL_SELECTED
+            sta CharCol
+            lda #80
+            jsr AddAToY
+            lda #'>'
+            jsr PutChar
+            lda #6
+            jsr AddAToY
+            lda #'<'
+            jmp PutChar
+
 
 ;----------------------------------------------------------------------------
 ; BASIC DRAWING
@@ -391,12 +430,15 @@ DrawTableCard:
             ldx TableIdx
             lda CD_CARD,x
             cmp #$FF
-            beq .stealrts1              ; don't draw empty card $FF (for now)
-            sta CardIdx
+            bne +
+            jsr ClearCard
+            lda #256-40+5                 ; fixup position
+            jmp AddAToY
++           sta CardIdx
             tax
             lda Cards+CARD_LTSC,x
             jsr SetFrameCharCol
-            lda #<PutChar                       ; enable color write
+            lda #<PutChar               ; enable color write
             sta .drawvaluefixup1
             ; use disabled color when tapped
             ldx TableIdx
@@ -437,7 +479,7 @@ DrawTableCard:
             lda CD_ATK,x
             ora #$30                    ; regular digits
             .drawvaluefixup1=*+1        ; make jsr switchable between PutChar and PutCharNoColor
-            jmp PutChar
+            jmp PutChar                 ; SELF-MODIFIED
 
 ; draws decorated card in A at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2,CardIdx)
 ; - draws legend border, full decoration and default attack/defense
