@@ -10,8 +10,13 @@
 
 ; Without packer it's possible to load and run $120-$1000 giving 3808 bytes instead of 2047 packed
 
-; Usable RAM:  $0120-$0276 (343 bytes) (stack reduced to $20) / $0293-$02FF (109 bytes)
+; Usable RAM:  $0120-$0276 (343 bytes) (with stack reduced to $20) / $0293-$02FF (109 bytes)
+; Note         $01ED-$200 (19 bytes) are squashed during loading
+; Usable RAM:  $0200-$03FF (512 bytes)
+; Note         $0314-$032A (22 bytes) are required vectors into ROM
 ; Usable INIT: $03D0-$03FF (48 bytes) / $0400-$07E7 SCREEN (200 bytes 5 middle rows) / $07E8-$0800 (24 bytes)
+
+; Approx $300 bytes code and $B0 bytes data = 944 bytes, crunched to 1104 bytes from $0801
 
 INIT=$0400 ; use this as run address for cruncher
 
@@ -45,11 +50,13 @@ CHR_SPACE=32+DEBUG*10 ; space or star
 !addr _ColorPos=$05 ; ptr
 !addr Tmp1=$07
 !addr Tmp2=$08
-!addr ZP_RNG_LOW = $09
-!addr ZP_RNG_HIGH = $0A
-!addr Suit=$0B
-!addr CardIdx=$0C
-!addr TableIdx=$0D
+!addr Tmp3=$09
+!addr Tmp4=$0A
+!addr ZP_RNG_LOW = $0B
+!addr ZP_RNG_HIGH = $0C
+!addr Suit=$0D
+!addr CardIdx=$0E
+!addr TableIdx=$0F
 ; player data (consecutive)
 !addr PlayerData=$10
     PD_LIFE=0       ; 0 .. 10
@@ -62,7 +69,7 @@ CHR_SPACE=32+DEBUG*10 ; space or star
       CD_CARD=0     ; card# >=$80=no card
       CD_ATK=1      ; attack
       CD_DEF=2      ; defense
-      CD_STATUS=3   ; status: 0=untapped, <>0=tapped
+      CD_STATUS=3   ; status: 0=normal, 1=tapped, >=$80 selected
       SIZEOF_CD=4
 SIZEOF_PD=32
 !addr AIData=$10+SIZEOF_PD
@@ -96,6 +103,7 @@ Start:
             lda #>($0400+15*40)
             jsr SetCursorY0
             lda #5 ; card# (goes per 5)
+            sta CardIdx
             jsr DrawCard
 
             ldx #<($0400+15*40+8)
@@ -105,13 +113,31 @@ Start:
             ; setup card on table
             lda #0 ; card# (goes per 5)
             sta CD_CARD,x
-            lda #0 ; tapped=1
+            lda #$81 ; tapped=1,selected=$80
             sta CD_STATUS,x
             lda #3
             sta CD_ATK,x
             lda #1
             sta CD_DEF,x
-            jsr DrawTableCard
+            ; setup card on table
+            lda #5 ; card# (goes per 5)
+            sta CD_CARD+4,x
+            sta CD_CARD+8,x
+            sta CD_CARD+12,x
+            sta CD_CARD+16,x
+            lda #$00 ; tapped=1,selected=$80
+            sta CD_STATUS+4,x
+            lda #2
+            sta CD_ATK+4,x
+            lda #2
+            sta CD_DEF+4,x
+            jsr DrawTable
+
+            ldx #<($0400+4*40+8)
+            lda #>($0400+4*40+8)
+            jsr SetCursorY0
+            ldx #PlayerData+PD_TABLE ; zP offset into table (increases per 4)
+            jsr DrawTable
 
 -           jsr $FFE4 ; Get From Keyboard
             beq -
@@ -336,18 +362,36 @@ DrawGlyph:
             inx
             dec Tmp2
             bne -
-.stealrts1: rts
+            rts
 
 
 ;----------------------------------------------------------------------------
 ; CARD DRAWING
 ;----------------------------------------------------------------------------
 
-; draws card on table in X at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2,TableIdx)
+; draws table in X at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2,Tmp3,CardIdx,TableIdx)
+DrawTable:
+            lda #5
+            sta Tmp3
+            stx TableIdx
+-           jsr DrawTableCard
+            lda TableIdx
+            clc
+            adc #4
+            sta TableIdx
+            lda #256-5*40+1             ; fixup position
+            jsr AddAToY
+            dec Tmp3
+            bne -
+.stealrts1: rts
+
+; draws card on table in TableIdx at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2,CardIdx,TableIdx)
 ; - draws status border, no decoration and highlighted attack/defense
 DrawTableCard:
-            stx TableIdx
+            ldx TableIdx
             lda CD_CARD,x
+            cmp #$FF
+            beq .stealrts1              ; don't draw empty card $FF (for now)
             sta CardIdx
             tax
             lda Cards+CARD_LTSC,x
@@ -356,10 +400,13 @@ DrawTableCard:
             sta .drawvaluefixup1
             ; use disabled color when tapped
             ldx TableIdx
-            lda CD_STATUS,x             ; 0=untapped, <>0=tapped
+            lda CD_STATUS,x             ; 0=normal, $1=tapped, >=$80 selected
             beq +
+            bmi .selected
             lda #COL_DISABLED
-            sta CharCol
+            bne ++                      ; always
+.selected:  lda #COL_SELECTED
+++          sta CharCol
             lda #<PutCharNoColor        ; disable color write
             sta .drawvaluefixup1
 +           jsr DrawCardTopFrame
@@ -395,8 +442,7 @@ DrawTableCard:
 ; draws decorated card in A at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2,CardIdx)
 ; - draws legend border, full decoration and default attack/defense
 DrawCard:
-            sta CardIdx
-            tax
+            ldx CardIdx
             lda Cards+CARD_LTSC,x
             jsr SetFrameCharCol
             ldx CardIdx
@@ -410,7 +456,6 @@ DrawCard:
             ldx CardIdx
             lda Cards+CARD_LTSC,x
             jsr SetSuitCharCol
-            sta CharCol
             lda Cards+CARD_GLYPH,x
             tax
             jmp DrawGlyph
@@ -673,6 +718,7 @@ SIZEOF_TEXT=*-TextData
 ;----------------------------------------------------------------------------
 ; MAX 2K ALLOWED HERE
 ;----------------------------------------------------------------------------
+!byte 0 ; DUMMY to show where we are in report
 !if * >= $1000 { !error "Out of memory" }
 
 
