@@ -16,7 +16,7 @@
 ; Note         $0314-$032A (22 bytes) are required vectors into ROM
 ; Usable INIT: $03D0-$03FF (48 bytes) / $0400-$07E7 SCREEN (200 bytes 5 middle rows) / $07E8-$0800 (24 bytes)
 
-; Approx $300 bytes code and $B0 bytes data = 944 bytes, crunched to 1104 bytes from $0801
+; Approx 0c3f-0801 = 1086 bytes code and 0d23-0c3f bytes data = 228 bytes, total 1314 crunched to 1384 bytes from $0801
 
 INIT=$0400 ; use this as run address for cruncher
 
@@ -66,14 +66,15 @@ CHR_SPACE=32+DEBUG*10 ; space or star
     PD_REMAIN=4     ; DECKSIZE-1 .. 0
     PD_HAND=5       ; 7 bytes (card#), >=$80=no card
     PD_TABLE=12     ; 20 bytes 5*4 bytes (card#,atd,def,status)
-      CD_CARD=0     ; card# >=$80=no card
-      CD_ATK=1      ; attack
-      CD_DEF=2      ; defense
-      CD_STATUS=3   ; status: 0=normal, 1=tapped, >=$80 selected
-      SIZEOF_CD=4
-SIZEOF_PD=32
+      TD_CARD=0     ; card# >=$80=no card
+      TD_ATK=1      ; attack
+      TD_DEF=2      ; defense
+      TD_STATUS=3   ; status: 0=normal, 1=tapped, >=$80 selected
+      SIZEOF_TD=4
+    PD_DECK=32      ; 32 bytes (card#)
+SIZEOF_PD=64
 !addr AIData=$10+SIZEOF_PD
-; TODO hand 7 bytes, table 5 * 4 bytes (card#,atd,def,status), deck (7 * 4 bytes, 1 byte per card)
+; ZP gets a bit wiffy from $A0 so be careful
 
 *=$0801
 !if DEBUG=1 {
@@ -84,6 +85,10 @@ SIZEOF_PD=32
 ; 2049 in DEBUG=0 mode, so use Exomizer to run from $0801
 Start:
             jsr InitPlayersData
+
+            jsr ScreenPickLeader
+
+            jmp MainLoop
 
             jsr DrawHealthBars
             jsr DrawCounters
@@ -112,25 +117,25 @@ Start:
             ldx #PlayerData+PD_TABLE ; zP offset into table (increases per 4)
             ; setup card on table
             lda #0 ; card# (goes per 5)
-            sta CD_CARD,x
+            sta TD_CARD,x
             lda #$81 ; tapped=1,selected=$80
-            sta CD_STATUS,x
+            sta TD_STATUS,x
             lda #3
-            sta CD_ATK,x
+            sta TD_ATK,x
             lda #1
-            sta CD_DEF,x
+            sta TD_DEF,x
             ; setup card on table
             lda #5 ; card# (goes per 5)
-            sta CD_CARD+4,x
-            ;sta CD_CARD+8,x
-            sta CD_CARD+12,x
-            sta CD_CARD+16,x
+            sta TD_CARD+4,x
+            ;sta TD_CARD+8,x
+            sta TD_CARD+12,x
+            sta TD_CARD+16,x
             lda #$00 ; tapped=1,selected=$80
-            sta CD_STATUS+4,x
+            sta TD_STATUS+4,x
             lda #2
-            sta CD_ATK+4,x
+            sta TD_ATK+4,x
             lda #2
-            sta CD_DEF+4,x
+            sta TD_DEF+4,x
             jsr DrawTable
 
             ldx #<($0400+4*40+8)
@@ -146,9 +151,106 @@ Start:
             lda #102
             jsr FillCard
 
--           jsr $FFE4 ; Get From Keyboard
+MainLoop:
+-           jsr $FFE4 ; Get From Keyboard : $9D=LEFT,$1D=RIGHT, $91=UP,$11=DOWN, $0D=ENTER, $20=SPACE, $03=R/S
             beq -
-            jmp * ; prevents RUN/STOP to break
+            sta $0427
+            jmp MainLoop
+
+
+;----------------------------------------------------------------------------
+; GAME SCREENS
+;----------------------------------------------------------------------------
+
+ScreenPickLeader:
+            jsr ClearAll
+
+            ; Pick leader
+            lda #GREY
+            sta CharCol
+            ldx #<($0400+1*40+9)
+            lda #>($0400+1*40+9)
+            jsr SetCursorY0
+            lda #T_PICK_LEADER
+            jsr DrawText
+
+            ; Draw leaders in upper part (decorated)
+            ldx #<($0400+2*40+8)
+            lda #>($0400+2*40+8)
+            jsr SetCursorY0
+            ldx #0
+-           stx TableIdx
+            lda SuitLeaders,x
+            sta CardIdx
+            jsr DrawCard
+            lda #256-40+2               ; fixup position
+            jsr AddAToY
+            ldx TableIdx
+            inx
+            cpx #4
+            bne -
+
+            ldx #0
+            stx TableIdx                ; select 1st
+.redrawleader:
+            ; show selected card name and effect
+            ldx #<($0400+8*40+8)
+            lda #>($0400+8*40+8)
+            jsr SetCursorY0
+            ; wipe previous text
+            lda #CHR_SPACE
+-           sta (_CursorPos),y
+            iny
+            cpy #72
+            bne -
+            ldy #0
+            ldx TableIdx
+            lda SuitLeaders,x
+            sta CardIdx
+            jsr DrawCardText
+
+            ldx #<($0400+2*40+8)
+            lda #>($0400+2*40+8)
+            jsr SetCursorY0
+            ; y = TableIdx * 6
+            clc
+            lda TableIdx
+            asl
+            asl
+            adc TableIdx
+            adc TableIdx
+            tay
+            jsr DrawCardSelect
+
+            ; TODO: Draw deck cards in lower part
+            ; TODO: Move left/right
+            ldx #10 ; delay a lot
+--          lda #$84
+-           cmp $d012
+            bne -
+            inc $d020
+-           cmp $d012
+            beq -
+            dec $d020
+            dex
+            bne --
+
+            ; y = TableIdx * 6
+            clc
+            lda TableIdx
+            asl
+            asl
+            adc TableIdx
+            adc TableIdx
+            tay
+            jsr ClearCardSelect
+
+            inc TableIdx
+            lda TableIdx
+            and #$03
+            sta TableIdx
+
+            jmp .redrawleader
 
 
 ;----------------------------------------------------------------------------
@@ -157,6 +259,12 @@ Start:
 
 InitPlayersData:
             ldx #SIZEOF_PD-1
+-           lda #$FF
+            sta PlayerData,x
+            sta AIData,x
+            dex
+            cpx #SIZEOF_INITDATA-1
+            bne -
 -           lda InitData,x
             sta PlayerData,x
             sta AIData,x
@@ -173,15 +281,14 @@ InitPlayersData:
 DrawStackSides:
             ldx #<($0400+3*40)
             lda #>($0400+3*40)
-            jsr SetCursor
-            ldy #0
+            jsr SetCursorY0
             lda #112
             jsr .put2
             lda #CHR_SPACE
             jsr PutCharMoveDown
             ldx #<($0400+15*40)
             lda #>($0400+15*40)
-            jsr SetCursor
+            jsr SetCursorY0
             lda #CHR_SPACE
             jsr .put2
             lda #109
@@ -323,12 +430,25 @@ FillCard:
             bne --
             rts
 
+; wipes the top and bottom of the screen completely (clobbers A,X)
+ClearAll:
+            ldx #0
+            lda #CHR_SPACE
+-           sta $0400,x
+            sta $0400+5*40,x
+            sta $0400+15*40,x
+            sta $0400+20*40,x
+            inx
+            cpx #5*40
+            bne -
+            rts
+
 ; draws card selection symbols around a card at cursor + Y+1 (clobbers A,X,Y,Tmp1)
 ; - cursor + Y+1 is assumed to be top-left of card
 DrawCardSelect:
             lda #COL_SELECTED
             sta CharCol
-            lda #80
+            lda #2*40
             jsr AddAToY
             lda #'>'
             jsr PutChar
@@ -337,13 +457,26 @@ DrawCardSelect:
             lda #'<'
             jmp PutChar
 
+; clears card selection symbols around a card at cursor + Y+1 (clobbers A,X,Y,Tmp1)
+; - cursor + Y+1 is assumed to be top-left of card
+ClearCardSelect:
+            lda #2*40
+            jsr AddAToY
+            lda #CHR_SPACE
+            jsr PutChar
+            lda #6
+            jsr AddAToY
+            lda #CHR_SPACE
+            jmp PutChar
+
 
 ;----------------------------------------------------------------------------
 ; BASIC DRAWING
 ;----------------------------------------------------------------------------
 
-; draws text X at cursor + Y+1 (clobbers A,X,Y,Tmp1)
+; draws text A at cursor + Y+1 (clobbers A,X,Y,Tmp1)
 DrawText:
+            tax
 -           lda TextData,x
             beq +                       ; text ends with 0
             jsr DrawMacro
@@ -424,11 +557,11 @@ DrawTable:
             bne -
 .stealrts1: rts
 
-; draws card on table in TableIdx at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2,CardIdx,TableIdx)
+; draws card on table in TableIdx at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2,CardIdx)
 ; - draws status border, no decoration and highlighted attack/defense
 DrawTableCard:
             ldx TableIdx
-            lda CD_CARD,x
+            lda TD_CARD,x
             cmp #$FF
             bne +
             jsr ClearCard
@@ -442,7 +575,7 @@ DrawTableCard:
             sta .drawvaluefixup1
             ; use disabled color when tapped
             ldx TableIdx
-            lda CD_STATUS,x             ; 0=normal, $1=tapped, >=$80 selected
+            lda TD_STATUS,x             ; 0=normal, $1=tapped, >=$80 selected
             beq +
             bmi .selected
             lda #COL_DISABLED
@@ -469,19 +602,19 @@ DrawTableCard:
 .drawvalue:
             lda (_CursorPos),y
             and #$0F
-            cmp CD_ATK,x                ; CARDATK-ACTUALATK Z=1:equal, C=1 actual<card C=0 actual>card
+            cmp TD_ATK,x                ; CARDATK-ACTUALATK Z=1:equal, C=1 actual<card C=0 actual>card
             beq .stealrts1              ; done
             bcc .higher
             lda #COL_LOWER
             bne +                       ; always
 .higher:    lda #COL_HIGHER
 +           sta CharCol
-            lda CD_ATK,x
+            lda TD_ATK,x
             ora #$30                    ; regular digits
             .drawvaluefixup1=*+1        ; make jsr switchable between PutChar and PutCharNoColor
             jmp PutChar                 ; SELF-MODIFIED
 
-; draws decorated card in A at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2,CardIdx)
+; draws decorated card in CardIdx at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2)
 ; - draws legend border, full decoration and default attack/defense
 DrawCard:
             ldx CardIdx
@@ -501,6 +634,21 @@ DrawCard:
             lda Cards+CARD_GLYPH,x
             tax
             jmp DrawGlyph
+
+; draws text of card in CardIdx at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2)
+DrawCardText:
+            sty Tmp2
+            ldx CardIdx
+            lda Cards+CARD_LTSC,x
+            jsr SetSuitCharCol
+            lda Cards+CARD_NAME,x
+            jsr DrawText
+            ldy Tmp2
+            lda #40
+            jsr AddAToY
+            ldx CardIdx
+            lda Cards+CARD_EFFECT,x
+            jmp DrawText
 
 ; draws card background at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2)
 DrawCardBack:
@@ -578,6 +726,8 @@ DrawCardBottomDecoration:
 ; CHARACTER DRAWING
 ;----------------------------------------------------------------------------
 
+!fill 6,$EA ; fixup when necessary
+
 ; draws char in A at cursor+Y+1 with color CharCol (clobbers Y)
 MovePutChar:
             iny
@@ -596,8 +746,6 @@ PutCharNoColor:
 ; puts cursor at X/A X=low byte, A=high byte and sets Y=0 (clobbers A,Y)
 SetCursorY0:
             ldy #0
-; puts cursor at X/A X=low byte, A=high byte (clobbers A)
-SetCursor:
             stx _CursorPos
             stx _ColorPos
             sta _CursorPos+1
@@ -663,34 +811,42 @@ SetSuitCharCol:
 ; the RNG. You can get 8-bit random numbers in A or 16-bit numbers
 ; from the zero page addresses. Leaves X/Y unchanged.
 random:
-        LDA ZP_RNG_HIGH
-        LSR
-        LDA ZP_RNG_LOW
-        ROR
-        EOR ZP_RNG_HIGH
-        STA ZP_RNG_HIGH ; high part of x ^= x << 7 done
-        ROR             ; A has now x >> 9 and high bit comes from low byte
-        EOR ZP_RNG_LOW
-        STA ZP_RNG_LOW  ; x ^= x >> 9 and the low part of x ^= x << 7 done
-        EOR ZP_RNG_HIGH
-        STA ZP_RNG_HIGH ; x ^= x << 8 done
-        RTS
+        lda ZP_RNG_HIGH
+        lsr
+        lda ZP_RNG_LOW
+        ror
+        eor ZP_RNG_HIGH
+        sta ZP_RNG_HIGH ; high part of x ^= x << 7 done
+        ror             ; A has now x >> 9 and high bit comes from low byte
+        eor ZP_RNG_LOW
+        sta ZP_RNG_LOW  ; x ^= x >> 9 and the low part of x ^= x << 7 done
+        eor ZP_RNG_HIGH
+        sta ZP_RNG_HIGH ; x ^= x << 8 done
+        rts
 
 
 ;----------------------------------------------------------------------------
 ; CARDS
 ;----------------------------------------------------------------------------
 
-CARD_LTSC=0         ; 1 byte LTSSCCCC : L=Legendary T=Type(0=Monster/1=Spell) SS=Suit(0,1,2,3) CCCC=Cost(0..15)
+CARD_LTSC=0         ; 1 byte LTSSCCCC : L=Legendary T=Type(0=Spell/1=Monster) SS=Suit(0,1,2,3) CCCC=Cost(0..15)
 CARD_ATDF=1         ; 1 byte AAAADDDD : AAAA=Attack DDDD=Defense
 CARD_NAME=2         ; 1 byte Name TextPtr
 CARD_EFFECT=3       ; 1 byte Effect TextPtr (also used to perform effect)
 CARD_GLYPH=4        ; 1 byte GlyphPtr
 
 Cards:
-    !byte $83, $32, N_GOBLIN_LEADER, E_ALL_GAIN11, G_LEGND_GOBLIN
-    !byte $01, $12, N_WANNABE,       T_NONE,       G_WANNABE
-
+    C_GOBLIN_LEADER=*-Cards
+    !byte $C3, $32, N_GOBLIN_LEADER, E_ALL_GAIN11, G_LEGND_GOBLIN
+    C_POLY_LEADER=*-Cards
+    !byte $D3, $17, N_POLY_LEADER,   T_NONE,       G_LEGND_POLY
+    C_CANDY_LEADER=*-Cards
+    !byte $E0, $00, N_CANDY_LEADER,  T_NONE,       G_LEGND_CANDY
+    C_SOAP_LEADER=*-Cards
+    !byte $F0, $00, N_SOAP_LEADER,   T_NONE,       G_LEGND_SOAP
+    !byte $41, $12, N_WANNABE,       T_NONE,       G_WANNABE
+SIZEOF_CARDS=*-Cards
+NUM_CARDS=SIZEOF_CARDS/5
 
 ;----------------------------------------------------------------------------
 ; GLYPHS
@@ -700,13 +856,25 @@ Cards:
 GlyphData1:
     G_LEGND_GOBLIN=*-GlyphData1
     !byte 73,104,85
+    G_LEGND_POLY=*-GlyphData1
+    !byte 206,160,205
+    G_LEGND_CANDY=*-GlyphData1
+    !byte 223,98,233
+    G_LEGND_SOAP=*-GlyphData1
+    !byte 255,251,252
     G_WANNABE=*-GlyphData1
     !byte 127,98,126
 GlyphData2:
     !byte 215,215,117
+    !byte 160,182,160
+    !byte 160,160,160
+    !byte 160,160,160
     !byte 17,17,97
 GlyphData3:
     !byte 81,73,41
+    !byte 192,159,192
+    !byte 105,226,95
+    !byte 124,226,126
     !byte 124,251,78
 
 
@@ -717,13 +885,21 @@ GlyphData3:
 ; Each string is a list of MacroPtrs and ends with 0
 TextData:
     N_GOBLIN_LEADER=*-TextData
-    !scr M_GOBLIN,M_LEADER
+    !byte M_GOBLIN,M_LEADER
     T_NONE=*-TextData
-    !scr 0
+    !byte 0
+    N_POLY_LEADER=*-TextData
+    !byte M_POLYSTYRENE,M_BLOCK,0
+    N_CANDY_LEADER=*-TextData
+    !byte M_HARD,M_CANDY,0
+    N_SOAP_LEADER=*-TextData
+    !byte M_FOREVER,M_SOAP,0
     N_WANNABE=*-TextData
-    !scr M_SUIT,M_WANNABE,0
+    !byte M_SUIT,M_WANNABE,0
     E_ALL_GAIN11=*-TextData
-    !scr M_ALL,M_SUIT,M_GAIN11,0
+    !byte M_ALL,M_SUIT,M_GAIN11,0
+    T_PICK_LEADER=*-TextData
+    !byte M_PICK,M_LEGENDARY,M_LEADER,0
 !if *-TextData >= $FF { !error "Out of TextData memory" }
 
 ; Text macros, each ends with a byte >= $80
@@ -738,6 +914,9 @@ MacroData:
     M_LEADER      =*-MacroData+1 : !scr "leade",'r'+$80
     M_WANNABE     =*-MacroData+1 : !scr "wannab",'e'+$80
     M_FOAM        =*-MacroData+1 : !scr "foa",'m'+$80
+    M_FOREVER     =*-MacroData+1 : !scr "foreve",'r'+$80
+    M_BLOCK       =*-MacroData+1 : !scr "bloc",'k'+$80
+    M_PICK        =*-MacroData+1 : !scr "pic",'k'+$80
     M_ALL         =*-MacroData+1 : !scr "al",'l'+$80
     M_GAIN11      =*-MacroData+1 : !scr "gain ",78,'1',83,'1'+$80
     M_TWAINPAIN   =*-MacroData+1 : !scr "twain pain game",'s'+$80
@@ -796,13 +975,13 @@ SIZEOF_TEXT=*-TextData
 ;----------------------------------------------------------------------------
 SuitTextData:
     !byte M_GOBLIN,M_POLYSTYRENE,M_CANDY,M_SOAP
+SuitLeaders:
+    !byte C_GOBLIN_LEADER,C_POLY_LEADER,C_CANDY_LEADER,C_SOAP_LEADER
 
-; empty PlayerData structure
+; initial PlayerData structure (rest is filled with $FF)
 InitData:
     !scr 10, "0/0", 0
-    !fill 7,$FF ; empty hand
-    !fill 5*4,$FF ; empty table
-!if *-InitData != SIZEOF_PD { !error "InitData not up to date" }
+SIZEOF_INITDATA = *-InitData
 
     !fill $30-(*-SuitTextData),0
 
