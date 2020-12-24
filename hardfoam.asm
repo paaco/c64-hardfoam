@@ -9,6 +9,8 @@
 ; Exomizer also uses $0334-$03D0 as decrunching buffer; decrunching there will hang
 
 ; Without packer it's possible to load and run $120-$1000 giving 3808 bytes instead of 2047 packed
+; Set IRQ to $EA81 to keep memory safe from overwriting.
+; Holes at $1ED-$0200 and $0314-$032A
 
 ; Usable RAM:  $0120-$0276 (343 bytes) (with stack reduced to $20) / $0293-$02FF (109 bytes)
 ; Note         $01ED-$200 (19 bytes) are squashed during loading
@@ -65,7 +67,7 @@ CHR_SPACE=32+DEBUG*10 ; space or star
     PD_MAXENERGY=3  ; $30 .. $39
     PD_REMAIN=4     ; DECKSIZE-1 .. 0
     PD_HAND=5       ; 7 bytes (card#), >=$80=no card
-    PD_TABLE=12     ; 20 bytes 5*4 bytes (card#,atd,def,status)
+    PD_TABLE=12     ; 20 bytes 5*4 bytes (card#,atd,def,status) TODO: SoA
       TD_CARD=0     ; card# >=$80=no card
       TD_ATK=1      ; attack
       TD_DEF=2      ; defense
@@ -165,7 +167,6 @@ MainLoop:
 ScreenPickLeader:
             jsr ClearAll
 
-            ; Pick leader
             lda #GREY
             sta CharCol
             ldx #<($0400+1*40+9)
@@ -174,7 +175,7 @@ ScreenPickLeader:
             lda #T_PICK_LEADER
             jsr DrawText
 
-            ; Draw leaders in upper part (decorated)
+            ; Draw decorated leaders in upper part
             ldx #<($0400+2*40+8)
             lda #>($0400+2*40+8)
             jsr SetCursorY0
@@ -183,16 +184,26 @@ ScreenPickLeader:
             lda SuitLeaders,x
             sta CardIdx
             jsr DrawCard
-            lda #256-40+2               ; fixup position
-            jsr AddAToY
             ldx TableIdx
             inx
             cpx #4
             bne -
 
-            ldx #0
-            stx TableIdx                ; select 1st
+            lda #1                      ; start somewhere
+            sta TableIdx
+
 .redrawleader:
+            lda TableIdx
+            tax
+            asl
+            asl
+            clc
+            adc TableIdx
+            adc TableIdx                ; A=TableIdx*6
+            sta Tmp3
+            lda SuitLeaders,x
+            sta CardIdx
+
             ; show selected card name and effect
             ldx #<($0400+8*40+8)
             lda #>($0400+8*40+8)
@@ -204,26 +215,38 @@ ScreenPickLeader:
             cpy #72
             bne -
             ldy #0
-            ldx TableIdx
-            lda SuitLeaders,x
-            sta CardIdx
             jsr DrawCardText
+
+            ; Create selectable deck cards in temporary table
+            ldx #6-1
+            lda CardIdx
+-           clc
+            adc #SIZEOF_CARD
+            sta PlayerData+PD_HAND,x
+            dex
+            bpl -
+
+            ; Draw deck cards in lower part
+            ldx #<($0400+15*40+2)
+            lda #>($0400+15*40+2)
+            jsr SetCursorY0
+            lda #6-1
+            sta Tmp4
+-           ldx Tmp4
+            lda PlayerData+PD_HAND,x
+            sta CardIdx
+            jsr DrawCard
+            dec Tmp4
+            bpl -
 
             ldx #<($0400+2*40+8)
             lda #>($0400+2*40+8)
             jsr SetCursorY0
-            ; y = TableIdx * 6
-            clc
-            lda TableIdx
-            asl
-            asl
-            adc TableIdx
-            adc TableIdx
-            tay
+            ldy Tmp3
             jsr DrawCardSelect
 
-            ; TODO: Draw deck cards in lower part
-            ; TODO: Move left/right
+            ; TODO: Move left/right/OK
+
             ldx #10 ; delay a lot
 --          lda #$84
 -           cmp $d012
@@ -235,14 +258,7 @@ ScreenPickLeader:
             dex
             bne --
 
-            ; y = TableIdx * 6
-            clc
-            lda TableIdx
-            asl
-            asl
-            adc TableIdx
-            adc TableIdx
-            tay
+            ldy Tmp3
             jsr ClearCardSelect
 
             inc TableIdx
@@ -412,24 +428,6 @@ AtoASCII2:
             lda #CHR_SPACE
 +           rts
 
-; clears the size of a card at cursor + Y+1 (clobbers A,X,Y,Tmp1)
-ClearCard:
-            lda #CHR_SPACE
-; fills the size of a card with A at cursor + Y+1 (clobbers A,X,Y,Tmp1)
-FillCard:
-            ldx #6
-            stx Tmp2
---          ldx #5
--           jsr MovePutChar
-            dex
-            bne -
-            pha
-            jsr AddFrameModuloToY
-            pla
-            dec Tmp2
-            bne --
-            rts
-
 ; wipes the top and bottom of the screen completely (clobbers A,X)
 ClearAll:
             ldx #0
@@ -443,7 +441,7 @@ ClearAll:
             bne -
             rts
 
-; draws card selection symbols around a card at cursor + Y+1 (clobbers A,X,Y,Tmp1)
+; draws card selection symbols around a card at cursor + Y+1 (clobbers A,Y,Tmp1)
 ; - cursor + Y+1 is assumed to be top-left of card
 DrawCardSelect:
             lda #COL_SELECTED
@@ -457,7 +455,7 @@ DrawCardSelect:
             lda #'<'
             jmp PutChar
 
-; clears card selection symbols around a card at cursor + Y+1 (clobbers A,X,Y,Tmp1)
+; clears card selection symbols around a card at cursor + Y+1 (clobbers A,Y,Tmp1)
 ; - cursor + Y+1 is assumed to be top-left of card
 ClearCardSelect:
             lda #2*40
@@ -541,6 +539,25 @@ DrawGlyph:
 ; CARD DRAWING
 ;----------------------------------------------------------------------------
 
+; clears the size of a card at cursor + Y+1 (clobbers A,X,Y,Tmp1)
+ClearCard:
+            lda #CHR_SPACE
+; fills the size of a card with A at cursor + Y+1 (clobbers A,X,Y,Tmp1)
+FillCard:
+            ldx #6
+            stx Tmp2
+--          ldx #5
+-           jsr MovePutChar
+            dex
+            bne -
+            pha
+            jsr AddFrameModuloToY
+            pla
+            dec Tmp2
+            bne --
+            lda #256-40*6+6                 ; fixup position
+            jmp AddAToY
+
 ; draws table in X at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2,Tmp3,CardIdx,TableIdx)
 DrawTable:
             lda #5
@@ -551,8 +568,6 @@ DrawTable:
             clc
             adc #4
             sta TableIdx
-            lda #256-5*40+1             ; fixup position
-            jsr AddAToY
             dec Tmp3
             bne -
 .stealrts1: rts
@@ -563,10 +578,7 @@ DrawTableCard:
             ldx TableIdx
             lda TD_CARD,x
             cmp #$FF
-            bne +
-            jsr ClearCard
-            lda #256-40+5                 ; fixup position
-            jmp AddAToY
+            beq ClearCard
 +           sta CardIdx
             tax
             lda Cards+CARD_LTSC,x
@@ -587,7 +599,7 @@ DrawTableCard:
 +           jsr DrawCardTopFrame
             jsr .drawcard1              ; draw remainder of card
             ; overwrite card values with actuals
-            lda #40*4-2
+            lda #40*5-4
             jsr AddAToY
             ; update attack value
             ldx TableIdx
@@ -597,7 +609,9 @@ DrawTableCard:
             iny
             iny
             iny
-            ; fall through
+            jsr .drawvalue
+            lda #256-40*5+1             ; fixup position
+            jmp AddAToY
 ; common code to read screen to determine high/low/same, X=table index
 .drawvalue:
             lda (_CursorPos),y
@@ -633,7 +647,9 @@ DrawCard:
             jsr SetSuitCharCol
             lda Cards+CARD_GLYPH,x
             tax
-            jmp DrawGlyph
+            jsr DrawGlyph
+            lda #256-40+2                       ; fixup position
+            jmp AddAToY
 
 ; draws text of card in CardIdx at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2)
 DrawCardText:
@@ -661,7 +677,9 @@ DrawCardBack:
             dec Tmp2
             bne -
             ldx #B_CARDBACKBOTTOM
-            jmp DrawBlockAddModulo
+            jsr DrawBlockAddModulo
+            lda #256-40*6+6             ; fixup position
+            jmp AddAToY
 
 ; draws card top frame with decoration in A at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2)
 DrawCardTopFrameDecorated:
@@ -726,7 +744,7 @@ DrawCardBottomDecoration:
 ; CHARACTER DRAWING
 ;----------------------------------------------------------------------------
 
-!fill 6,$EA ; fixup when necessary
+;!fill 6,$EA ; fixup when necessary
 
 ; draws char in A at cursor+Y+1 with color CharCol (clobbers Y)
 MovePutChar:
@@ -834,17 +852,41 @@ CARD_ATDF=1         ; 1 byte AAAADDDD : AAAA=Attack DDDD=Defense
 CARD_NAME=2         ; 1 byte Name TextPtr
 CARD_EFFECT=3       ; 1 byte Effect TextPtr (also used to perform effect)
 CARD_GLYPH=4        ; 1 byte GlyphPtr
+SIZEOF_CARD=5
 
 Cards:
     C_GOBLIN_LEADER=*-Cards
     !byte $C3, $32, N_GOBLIN_LEADER, E_ALL_GAIN11, G_LEGND_GOBLIN
+    !byte $41, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $42, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $43, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $44, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $45, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $46, $12, N_WANNABE,       T_NONE,       G_WANNABE
     C_POLY_LEADER=*-Cards
     !byte $D3, $17, N_POLY_LEADER,   T_NONE,       G_LEGND_POLY
+    !byte $51, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $52, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $53, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $54, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $55, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $56, $12, N_WANNABE,       T_NONE,       G_WANNABE
     C_CANDY_LEADER=*-Cards
     !byte $E0, $00, N_CANDY_LEADER,  T_NONE,       G_LEGND_CANDY
+    !byte $61, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $62, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $63, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $64, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $65, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $66, $12, N_WANNABE,       T_NONE,       G_WANNABE
     C_SOAP_LEADER=*-Cards
     !byte $F0, $00, N_SOAP_LEADER,   T_NONE,       G_LEGND_SOAP
-    !byte $41, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $71, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $72, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $73, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $74, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $75, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $76, $12, N_WANNABE,       T_NONE,       G_WANNABE
 SIZEOF_CARDS=*-Cards
 NUM_CARDS=SIZEOF_CARDS/5
 
@@ -1015,8 +1057,6 @@ REALINIT:
             ; move stack down to gain extra room from $120
             ldx #$1f
             txs
-
-            ; TODO: D000+, D400+ and D800+ inits are fine here
 
             ; set color of counters
             ldx #2

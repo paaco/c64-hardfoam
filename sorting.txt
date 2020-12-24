@@ -1,0 +1,46 @@
+SORTING
+
+This sorts a list of cards equally distributed:
+(assuming you can calculate random(i,n-1) easily ofcourse)
+
+on input list L:
+   for i in range(0, n-1) inclusive:
+      j = random(i, n-1) inclusive
+      swap L[i], L[j]
+
+RANDOM
+
+random generator using SID
+
+LDA #$FF  ; maximum frequency value
+STA $D40E ; voice 3 frequency low byte
+STA $D40F ; voice 3 frequency high byte
+LDA #$80  ; noise waveform, gate bit off
+STA $D412 ; voice 3 control register
+
+RANDOM WITHIN RANGE
+
+    In machine language, we're usually interested in single byte values: integers in the range 0-255.
+    Should larger values be needed, you can always generate two or more bytes and combine them.
+    Getting numbers within a certain range is simply a matter of generating numbers until you find
+    one that falls in the range you want. For instance, the following routine generates numbers within
+    the range $10-$40 (before performing this routine, you must set up the SID chip as shown above):
+
+RAND LDA $D41B ; get random value
+                from 0-255
+     CMP #$31  ; compare to
+                 U-L+1
+               ; U-L+1 = $31 =
+                $40-$10+$01
+     BCS RAND   ; branch if value >
+                U-L+1
+     ADC #$10  ; add L
+     RTS
+
+    This routine generates random numbers until one is found that falls between 0 and the difference
+    between the high and low values. Then the low value is added to the result to give a value between
+    the low and high limits, inclusive. If the range is very small, many numbers may have to be generated
+    before you find one that's suitable.
+    You can decrease the delay by ANDing the random number with a value that removes the unwanted higher
+    bits. For instance, if the difference between the low and high limits is $0A, then AND the random
+    value with $0F to remove the four high bits, then test whether it falls within the range.
