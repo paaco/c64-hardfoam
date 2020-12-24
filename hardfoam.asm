@@ -76,6 +76,7 @@ CHR_SPACE=32+DEBUG*10 ; space or star
     PD_DECK=32      ; 32 bytes (card#)
 SIZEOF_PD=64
 !addr AIData=$10+SIZEOF_PD
+!addr Joystick=$90
 ; ZP gets a bit wiffy from $A0 so be careful
 
 *=$0801
@@ -841,6 +842,70 @@ random:
         eor ZP_RNG_HIGH
         sta ZP_RNG_HIGH ; x ^= x << 8 done
         rts
+
+
+;----------------------------------------------------------------------------
+; KEYBOARD / JOYSTICK INPUT
+;----------------------------------------------------------------------------
+
+; Reads joystick in Joystick variable (0 active); if joystick is not active, scans keyboard
+ReadJoystick:
+            ; disconnect keyboard
+            lda #%11111111
+            sta $DC00
+            ; scan joystick
+            lda $DC00           ; Joystick A in control port 2 0=active: 1=up 2=down 4=left 8=right 16=fire
+            and $DC01           ; Joystick B in control port 1 0=active: 1=up 2=down 4=left 8=right 16=fire
+            ora #%11100000      ; ignore other bits ==> $FF is nothing pressed
+            sta Joystick
+            cmp #%11111111
+            beq ReadKeyboard
+            rts
+
+; Reads keyboard and emulates joystick with Cursor, (right) Shift and Return keys
+ReadKeyboard:
+            ; scan keyboard
+            lda #%10111110      ; rows 0 and 6: 7=C_U/D 4=S_R 2=C_L/R 1=CR
+            sta $DC00
+            ; (Not implemented) row 1 >>2 |Bit 1| S_L |  E  |  S  |  Z  |  4  |  A  |  W  |  3  |
+            ; (Not implemented) row 7 >>1 |Bit 7| R/S |  Q  |  C= |SPACE|  2  | CTRL|A_LFT|  1  |
+            lda $DC01
+            ora #%01101001      ; ignore other bits ==> $FF is nothing pressed
+            eor #%11111111      ; 1-active is easier to test double bits
+            tay                 ; backup
+            ; convert Y to joystick values
+            ; Fire
+            ldx #%11111111
+            tya
+            and #%00001010      ; CR or SPACE?
+            beq +               ; no
+            ldx #%11101111      ; FIRE
++           stx Joystick
+            ; Up/Down
+            tya
+            and #%10000000      ; C_U/D?
+            beq ++              ; no
+            ldx #%11111101      ; DOWN
+            tya
+            and #%00011000      ; SHIFT?
+            beq +               ; no
+            inx                 ; UP (%11111110)
++           txa
+            and Joystick
+            sta Joystick
+++          ; Left/Right
+            tya
+            and #%00000100      ; C_L/R
+            beq ++
+            ldx #%11110111      ; RIGHT
+            tya
+            and #%00011000      ; SHIFT?
+            beq +               ; no
+            ldx #%11111011      ; LEFT
++           txa
+            and Joystick
+            sta Joystick
+++          rts
 
 
 ;----------------------------------------------------------------------------
