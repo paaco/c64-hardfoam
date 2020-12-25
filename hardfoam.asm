@@ -22,7 +22,7 @@
 
 INIT=$0400 ; use this as run address for cruncher
 
-!ifndef DEBUG {DEBUG=1}
+!ifndef DEBUG {DEBUG=0}
 
 ;!source "constants.inc" ; older acme doesn't support same-dir includes
 BLACK=0
@@ -79,13 +79,44 @@ SIZEOF_PD=64
 !addr Joystick=$90
 ; ZP gets a bit wiffy from $A0 so be careful
 
-*=$0801
-!if DEBUG=1 {
-    !initmem $74
-    !byte $0b,$08,$00,$13,$9e,$34,$38,$36,$34,$00,$00,$00   ; 4864 SYS4864 ; developer init
-}
+;############################################################################
+*=$0120
+            ; DATA
 
-; 2049 in DEBUG=0 mode, so use Exomizer to run from $0801
+;############################################################################
+*=$01ED
+            ; RUN-TIME DATA
+
+;############################################################################
+*=$01F8
+            ; override stack with start address
+            !word INIT-1
+
+            ; DATA?
+            !byte 1,2,3,4,5,6
+
+;############################################################################
+*=$0200
+            ; DATA
+
+;############################################################################
+*=$0314
+            ; IRQ, BRK and NMI Vectors to keep
+            !byte $31,$ea,$66,$fe,$47,$fe
+            !byte $4a,$f3,$91,$f2,$0e,$f2
+            !byte $50,$f2,$33,$f3,$57,$f1,$ca,$f1
+            !byte $ed,$f6 ; STOP vector - Essential to avoid JAM
+
+            ; DATA
+
+;############################################################################
+*=$0400
+            ; SCREEN
+
+;############################################################################
+*=$0800
+            !byte $00,$0b,$08,$00,$04,$9e,$31,$30,$32,$34,$00,$00,$00   ; 1024 SYS1024
+            ; CODE
 Start:
             jsr InitPlayersData
 
@@ -1062,33 +1093,7 @@ SIZEOF_TEXT=*-TextData
 !byte 0 ; DUMMY to show where we are in report
 !if * >= $1000 { !error "Out of memory" }
 
-
-;----------------------------------------------------------------------------
-; DEBUG BUILD ONLY copy loop for INIT at $1300=4864
-;----------------------------------------------------------------------------
-!if DEBUG=1 {
-            *=$1300
-            ldx #$100-$D0-1
--           lda $13D0,x
-            sta $03D0,x
-            dex
-            bpl -
-            ldx #0
--           lda $1400,x
-            sta $0400,x
-            lda $1500,x
-            sta $0500,x
-            lda $1600,x
-            sta $0600,x
-            lda $1700,x
-            sta $0700,x
-            inx
-            bne -
-            jmp REALINIT
-            *=$13D0 ; 5072
-} else {
             *=$03D0
-}
 
 ;----------------------------------------------------------------------------
 ; DATA (03D0-03FF)
