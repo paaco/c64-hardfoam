@@ -34,7 +34,7 @@ ORANGE=8
 LIGHT_RED=10
 GREY=12
 ; colors
-COL_BORDER=BLACK
+COL_BORDER=BLUE
 COL_SCREEN=BLUE
 COL_HEALTH_ON=LIGHT_RED
 COL_HEALTH_OFF=BLACK
@@ -90,8 +90,6 @@ Start:
             jsr InitPlayersData
 
             jsr ScreenPickLeader
-
-            jmp MainLoop
 
             jsr DrawHealthBars
             jsr DrawCounters
@@ -154,11 +152,7 @@ Start:
             lda #102
             jsr FillCard
 
-MainLoop:
--           jsr $FFE4 ; Get From Keyboard : $9D=LEFT,$1D=RIGHT, $91=UP,$11=DOWN, $0D=ENTER, $20=SPACE, $03=R/S
-            beq -
-            sta $0427
-            jmp MainLoop
+            jmp *
 
 
 ;----------------------------------------------------------------------------
@@ -195,6 +189,8 @@ ScreenPickLeader:
 
 .redrawleader:
             lda TableIdx
+            and #$03
+            sta TableIdx
             tax
             asl
             asl
@@ -246,28 +242,34 @@ ScreenPickLeader:
             ldy Tmp3
             jsr DrawCardSelect
 
-            ; TODO: Move left/right/OK
-
-            ldx #10 ; delay a lot
---          lda #$84
--           cmp $d012
-            bne -
-            inc $d020
--           cmp $d012
+            jsr DebounceJoystick
+-           jsr ReadJoystick            ; 111FRLDU
             beq -
-            dec $d020
-            dex
-            bne --
-
-            ldy Tmp3
-            jsr ClearCardSelect
-
+            cmp #%11101111              ; FIRE
+            bne +
+            jsr ClearAll
+            rts ; done for now
++           cmp #%11110111              ; RIGHT
+            bne +
             inc TableIdx
-            lda TableIdx
-            and #$03
-            sta TableIdx
+            bne ++                      ; always
++           ; otherwise LEFT
+            dec TableIdx
 
+++          ldy Tmp3
+            jsr ClearCardSelect
             jmp .redrawleader
+
+;             ldx #10 ; delay a lot
+; --          lda #$84
+; -           cmp $d012
+;             bne -
+;             inc $d020
+; -           cmp $d012
+;             beq -
+;             dec $d020
+;             dex
+;             bne --
 
 
 ;----------------------------------------------------------------------------
@@ -848,7 +850,14 @@ random:
 ; KEYBOARD / JOYSTICK INPUT
 ;----------------------------------------------------------------------------
 
-; Reads joystick in Joystick variable (0 active); if joystick is not active, scans keyboard
+DebounceJoystick:
+-           jsr ReadJoystick
+            bne -
+            rts
+
+; Reads Joystick A/B value (0 active) in A and Joystick variable (clobbers A,X)
+;  Z=1/X=0 means no (joystick) key pressed
+; If joystick is not active, scans keyboard
 ReadJoystick:
             ; disconnect keyboard
             lda #%11111111
@@ -858,11 +867,12 @@ ReadJoystick:
             and $DC01           ; Joystick B in control port 1 0=active: 1=up 2=down 4=left 8=right 16=fire
             ora #%11100000      ; ignore other bits ==> $FF is nothing pressed
             sta Joystick
-            cmp #%11111111
-            beq ReadKeyboard
-            rts
+            tax
+            inx                 ; FF+1=0, so Z=1 means no input read
+            bne .stealrts2      ; done
+            ; fall through
 
-; Reads keyboard and emulates joystick with Cursor, (right) Shift and Return keys
+; Reads keyboard and emulates joystick with Cursor, (right) Shift and Return keys (clobbers A,X,Y)
 ReadKeyboard:
             ; scan keyboard
             lda #%10111110      ; rows 0 and 6: 7=C_U/D 4=S_R 2=C_L/R 1=CR
@@ -905,7 +915,10 @@ ReadKeyboard:
 +           txa
             and Joystick
             sta Joystick
-++          rts
+++          lda Joystick        ; end with joystick in A
+            tax
+            inx                 ; FF+1=0, so Z=1 means no input read
+.stealrts2: rts
 
 
 ;----------------------------------------------------------------------------
@@ -1122,6 +1135,13 @@ REALINIT:
             ; move stack down to gain extra room from $120
             ldx #$1f
             txs
+
+            ; disable IRQ to avoid KERNAL messing with keyboard
+            ldy #$7f    ; $7f = %01111111
+            sty $dc0d   ; Turn off CIAs Timer interrupts
+            sty $dd0d   ; Turn off CIAs Timer interrupts
+            lda $dc0d   ; cancel all CIA-IRQs in queue/unprocessed
+            lda $dd0d   ; cancel all CIA-IRQs in queue/unprocessed
 
             ; set color of counters
             ldx #2
