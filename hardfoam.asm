@@ -354,7 +354,79 @@ SetMaxIndexX0:
 *=$02A1     ; RS232 Enables SHOULD STAY 0 DURING LOADING!
             !byte 0
 
-            !fill 114,$EE ; remaining
+;----------------------------------------------------------------------------
+; KEYBOARD / JOYSTICK INPUT
+;----------------------------------------------------------------------------
+
+DebounceJoystick:
+-           jsr ReadJoystick
+            bne -
+            rts
+
+; Reads Joystick A/B value (0 active) in A and Joystick variable (clobbers A,X,Y)
+;  Z=1/X=0 means no (joystick) key pressed
+; If joystick is not active, scans keyboard
+ReadJoystick:
+            ; disconnect keyboard
+            lda #%11111111
+            sta $DC00
+            ; scan joystick
+            lda $DC00           ; Joystick A in control port 2 0=active: 1=up 2=down 4=left 8=right 16=fire
+            and $DC01           ; Joystick B in control port 1 0=active: 1=up 2=down 4=left 8=right 16=fire
+            ora #%11100000      ; ignore other bits ==> $FF is nothing pressed
+            sta Joystick
+            tax
+            inx                 ; FF+1=0, so Z=1 means no input read
+            bne .stealrts2      ; done
+            ; fall through
+
+; Reads keyboard and emulates joystick with Cursor, (right) Shift and Return keys (clobbers A,X,Y)
+ReadKeyboard:
+            ; scan keyboard
+            lda #%10111110      ; rows 0 and 6: 7=C_U/D 4=S_R 2=C_L/R 1=CR
+            sta $DC00
+            ; (Not implemented) row 1 >>2 |Bit 1| S_L |  E  |  S  |  Z  |  4  |  A  |  W  |  3  |
+            ; (Not implemented) row 7 >>1 |Bit 7| R/S |  Q  |  C= |SPACE|  2  | CTRL|A_LFT|  1  |
+            lda $DC01
+            ora #%01101001      ; ignore other bits ==> $FF is nothing pressed
+            eor #%11111111      ; 1-active is easier to test double bits
+            tay                 ; backup
+            ; Fire
+            ldx #%11111111
+            and #%00001010      ; CR or SPACE?
+            beq +               ; no
+            ldx #%11101111      ; FIRE
++           stx Joystick
+            ; Up/Down
+            tya
+            and #%10000000      ; C_U/D?
+            beq ++              ; no
+            ldx #%11111101      ; DOWN
+            tya
+            and #%00011000      ; SHIFT?
+            beq +               ; no
+            inx                 ; UP (%11111110)
++           txa
+            and Joystick
+            sta Joystick
+++          ; Left/Right
+            tya
+            and #%00000100      ; C_L/R
+            beq ++
+            ldx #%11110111      ; RIGHT
+            tya
+            and #%00011000      ; SHIFT?
+            beq +               ; no
+            ldx #%11111011      ; LEFT
++           txa
+            and Joystick
+            sta Joystick
+++          lda Joystick        ; end with joystick in A
+            tax
+            inx                 ; FF+1=0, so Z=1 means no input read
+.stealrts2: rts
+
+            !fill 24,$EE ; remaining
 
 ;############################################################################
 *=$0314     ; IRQ, BRK and NMI Vectors to keep
@@ -500,8 +572,6 @@ Start:
             jsr SetCursorY0
             ldx #PlayerData+PD_TABLE ; zP offset into table (increases per 4)
             jsr DrawTable
-            ldy #6*4
-            jsr DrawCardSelect
             ldy #0
             lda #BLACK
             sta CharCol
@@ -836,14 +906,12 @@ ClearUpper:
             rts
 
 ; draws card selection symbols around a card at cursor + Index*6 (clobbers A,X,Y,Tmp1,CardYIndex)
+; - cursor is assumed to be top-left of card deck
 DrawCardSelectIndex:
             ldx Index
             lda CardSelectionYOffsets,x
             sta CardYIndex
             tay
-; draws card selection symbols around a card at cursor + Y+1 (clobbers A,X,Y,Tmp1)
-; - cursor + Y+1 is assumed to be top-left of card
-DrawCardSelect:
             lda #COL_SELECTED
             sta CharCol
             ldx #B_SELECTOR
@@ -851,11 +919,9 @@ DrawCardSelect:
             jmp DrawBlock
 
 ; clears card selection symbols around a card at cursor + CardYIndex (clobbers A,X,Y,Tmp1)
+; - cursor is assumed to be top-left of card deck
 ClearCardSelectIndex:
             ldy CardYIndex
-; clears card selection symbols around a card at cursor + Y+1 (clobbers A,X,Y,Tmp1)
-; - cursor + Y+1 is assumed to be top-left of card
-ClearCardSelect:
             ldx #B_CLEARSELECTOR
             bne .drawselector           ; always
 
@@ -1084,81 +1150,6 @@ SetSuitCharCol:
             and #$03
             sta CharCol
             rts
-
-
-;----------------------------------------------------------------------------
-; KEYBOARD / JOYSTICK INPUT
-;----------------------------------------------------------------------------
-
-DebounceJoystick:
--           jsr ReadJoystick
-            bne -
-            rts
-
-; Reads Joystick A/B value (0 active) in A and Joystick variable (clobbers A,X,Y)
-;  Z=1/X=0 means no (joystick) key pressed
-; If joystick is not active, scans keyboard
-ReadJoystick:
-            ; disconnect keyboard
-            lda #%11111111
-            sta $DC00
-            ; scan joystick
-            lda $DC00           ; Joystick A in control port 2 0=active: 1=up 2=down 4=left 8=right 16=fire
-            and $DC01           ; Joystick B in control port 1 0=active: 1=up 2=down 4=left 8=right 16=fire
-            ora #%11100000      ; ignore other bits ==> $FF is nothing pressed
-            sta Joystick
-            tax
-            inx                 ; FF+1=0, so Z=1 means no input read
-            bne .stealrts2      ; done
-            ; fall through
-
-; Reads keyboard and emulates joystick with Cursor, (right) Shift and Return keys (clobbers A,X,Y)
-ReadKeyboard:
-            ; scan keyboard
-            lda #%10111110      ; rows 0 and 6: 7=C_U/D 4=S_R 2=C_L/R 1=CR
-            sta $DC00
-            ; (Not implemented) row 1 >>2 |Bit 1| S_L |  E  |  S  |  Z  |  4  |  A  |  W  |  3  |
-            ; (Not implemented) row 7 >>1 |Bit 7| R/S |  Q  |  C= |SPACE|  2  | CTRL|A_LFT|  1  |
-            lda $DC01
-            ora #%01101001      ; ignore other bits ==> $FF is nothing pressed
-            eor #%11111111      ; 1-active is easier to test double bits
-            tay                 ; backup
-            ; convert Y to joystick values
-            ; Fire
-            ldx #%11111111
-            tya
-            and #%00001010      ; CR or SPACE?
-            beq +               ; no
-            ldx #%11101111      ; FIRE
-+           stx Joystick
-            ; Up/Down
-            tya
-            and #%10000000      ; C_U/D?
-            beq ++              ; no
-            ldx #%11111101      ; DOWN
-            tya
-            and #%00011000      ; SHIFT?
-            beq +               ; no
-            inx                 ; UP (%11111110)
-+           txa
-            and Joystick
-            sta Joystick
-++          ; Left/Right
-            tya
-            and #%00000100      ; C_L/R
-            beq ++
-            ldx #%11110111      ; RIGHT
-            tya
-            and #%00011000      ; SHIFT?
-            beq +               ; no
-            ldx #%11111011      ; LEFT
-+           txa
-            and Joystick
-            sta Joystick
-++          lda Joystick        ; end with joystick in A
-            tax
-            inx                 ; FF+1=0, so Z=1 means no input read
-.stealrts2: rts
 
 
 ;----------------------------------------------------------------------------
