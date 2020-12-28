@@ -476,25 +476,7 @@ INIT:
 
             ; TODO setup SID
 
-            ; set color of counters
-            ldx #3-1
--           lda #COL_HEALTH_ON
-            sta $D800,x
-            sta $D800+24*40,x
-            lda #COL_PLAIN
-            sta $D800+40,x
-            sta $D800+23*40,x
-            dex
-            bpl -
-
-            ; hide middle lines
-            ldx #200
-            lda #COL_SCREEN-DEBUG
--           sta $D800+10*40-1,x
-            dex
-            bne -
-
-            jmp Start
+            jmp Logo
 
 Overwrite01EDCopy:
 ;InitData:
@@ -513,6 +495,102 @@ SIZEOF_Overwrite01EDCopy=*-Overwrite01EDCopy
 
 ;############################################################################
 *=$0658     ; SCREEN (WILL BE WIPED)
+
+*=$0658+5*40 ; in lowest 5*40=200 bytes
+Logo:
+            jsr .drawlogo
+            ; set ptrs to lower part ($0659)
+            lda #$59
+            sta .logoptr
+            sta .logoptr+3
+            inc .logoptr+1
+            inc .logoptr+3+1
+            lda #<(logo+20)
+            sta .logosrc
+            jsr .drawlogo
+            dec .logoptr-2 ; remove #81 from screen
+
+            ; fill everything but the logo blue
+--          ldx #0
+            lda #BLUE-DEBUG
+            .screenptr=*+1
+-           ldy $0400,x
+---         cmp $d012 ; slow down
+            bne ---
+            iny
+            cpy #82
+            beq +
+            .colorptr=*+1
+            sta $d800,x
++           inx
+            cpx #200
+            bne -
+            lda .screenptr
+            clc
+            adc #200
+            sta .screenptr
+            sta .colorptr
+            bcc +
+            inc .screenptr+1
+            inc .colorptr+1
++           cmp #200
+            bne +
+            jsr .stealrts1 ; TODO put TWAIN PAIN GAMES ON SCREEN
++           cmp #$E8 ; end of screen
+            bne --
+
+            ; set color of counters
+            ldx #3-1
+-           lda #COL_HEALTH_ON
+            sta $D800,x
+            sta $D800+24*40,x
+            lda #COL_PLAIN
+            sta $D800+40,x
+            sta $D800+23*40,x
+            dex
+            bpl -
+
+            jsr DebounceJoystick
+-           jsr ReadJoystick
+            beq -
+            bne Start                   ; always
+
+.drawlogo:
+            ldx #0
+--          ldy #10 ; 10 pixels = 8 from the byte and 2 empty
+            .logosrc = *+1
+-           asl logo,x
+            bcc +
+            lda #81
+            .logoptr = *+1
+            sta $0400+1+5*40
+            sta $d800+1+5*40
+---         cmp $d012 ; slow down
+            bne ---
++           inc .logoptr
+            inc .logoptr+3
+            bne +
+            inc .logoptr+1
+            inc .logoptr+3+1
++           dey
+            bne -
+            inx
+            cpx #4*5
+            bne --
+            rts
+
+*=$0400+24*40
+logo:       !byte %01100110,%00111110,%11111110,%11111110
+            !byte %11100111,%01100111,%11100111,%11100111
+            !byte %11111111,%11111111,%11111110,%11100111
+            !byte %11100111,%11100111,%11101100,%11100111
+            !byte %01100110,%11100111,%11100111,%11111110
+
+            !byte %01111111,%01111110,%00111110,%11101110
+            !byte %11100000,%11100111,%01100111,%11111111
+            !byte %11111100,%11100111,%11111111,%11011011
+            !byte %11100000,%11100111,%11100111,%11000011
+            !byte %01100000,%01111110,%11100111,%11000011
 
 ;############################################################################
 *=$07E8     ; CODE
@@ -648,7 +726,9 @@ ScreenCreateDeck:
 ; SELECT CARDS
 ;--------------
 ScreenPickCards:
+            ; TODO: put leader in deck
             jsr ClearUpper
+            ; TODO draw current deck (instead of just leader)
             ldy #<($0400+2*40+2)
             lda #>($0400+2*40+2)
             jsr SetCursorY0
