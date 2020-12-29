@@ -513,7 +513,7 @@ Overwrite01EDCopy:
     !byte C_POLY_LEADER,C_CANDY_LEADER,C_SOAP_LEADER,C_GOBLIN_LEADER
 SIZEOF_Overwrite01EDCopy=*-Overwrite01EDCopy
 
-            !fill 23,$EE ; remaining
+            !fill 23,$EE ; remaining WIPED
 
 *=$0400+3*40+(40-16)/2 ; $0484 above logo so it is still alive
             !scr "twain pain games" ; 16 bytes
@@ -621,7 +621,7 @@ logo:       !byte %01100110,%00111110,%01111110,%11111110
 *=$07E8     ; CODE
 
 Start:
-            ;jsr ScreenCreateDeck
+            jsr ScreenCreateDeck
 
             jsr DrawHealthBars
             jsr DrawCounters
@@ -772,9 +772,12 @@ ScreenPickCards:
             jsr DrawSelectionDeck
             jsr PickCards
 
-            ; part 3: setup deck TODO shuffle
-            ldx #PlayerData+PD_DECK     ; ZP offset to deck (should be divisible by $10)
-            jsr UnpackDeck
+            ; part 3: setup deck
+            lda #33
+            sta ZP_RNG_LOW
+            jsr UnpackAndShuffleDeck
+
+            ; TODO part 4: setup opponent
 
             jmp *
 
@@ -817,6 +820,7 @@ SetupSelectionDeck:
             dex
             bpl -
             rts
+
 ; draw selection deck card in lower part; if card=$FF then card back is drawn
 DrawSelectionDeck:
             ldy #<($0400+17*40+2)
@@ -841,7 +845,7 @@ DrawPickedDeck:
 -           ldx Tmp4
             lda PlayerData+PD_DECK,x
             jsr DrawCardAOrEmpty
-            dey
+            dey                         ; remove space between cards
             inc Tmp4
             lda Tmp4
             cmp #8
@@ -883,28 +887,20 @@ InitPlayersData:
             bpl -
             rts
 
-; expands 8 byte card deck at X in ZP to 28 cards (clobbers A,X,Y)
-UnpackDeck:
-            lda $00,x                   ; leader
+; expands and shuffles PlayerData deck from 8 bytes to 28 cards
+UnpackAndShuffleDeck:
+            lda PlayerData+PD_DECK      ; leader
             pha                         ; backup
-            stx .leaderptr
-            txa
-            clc
-            adc #28-1
-            tay                         ; Y=X+28-1
-            txa
-            ora #$07
-            tax
--           lda $00,x
-            sta $00,y
+            ldx #7
+            ldy #28-1
+-           lda PlayerData+PD_DECK,x
+            sta PlayerData+PD_DECK,y
             dey
             tya
-            and #%00000011              ; check lower 2 bits
-            cmp #(28-1)&%00000011       ; NOTE: THIS ONLY WORKS IF DECK IS LOCATED DIVISIBLE BY $10
+            and #%00000011              ; use lower 2 bits
+            cmp #(28-1)&%00000011       ; to loop 4 times
             bne -
             dex
-            txa
-            and #$07
             bne -
             ; put leader in random place
 .random027: jsr Random ; 0-255
@@ -913,8 +909,34 @@ UnpackDeck:
             bcs .random027
             tax
             pla
-            .leaderptr=*+1
-            sta $00,x
+            sta PlayerData+PD_DECK,x
+            ; fall through
+
+; Knuth Fisher-Yates shuffle
+;    for i in range(0, n-1) inclusive:
+;       j = i + random(0, n-1 - i) inclusive
+;       swap L[i], L[j]
+ShuffleDeck:
+            ldx #0                      ; i
+            lda #(28-1)+1               ; deck size
+            sta Tmp1                    ; "n-1"
+.randomI:   jsr Random                  ; 0-255
+            and #$1f                    ; 0-31
+            cmp Tmp1
+            bcs .randomI                ; 0..Tmp2-1
+            stx Tmp2                    ; i
+            clc
+            adc Tmp2                    ; A = j = i + random(0, n-1-i)
+            ; swap L[i], L[j]
+            ldy PlayerData+PD_DECK,x    ; Y=L[i]
+            tax
+            lda PlayerData+PD_DECK,x    ; A=L[j]
+            sty PlayerData+PD_DECK,x    ; L[j]=L[i]
+            ldx Tmp2
+            sta PlayerData+PD_DECK,x    ; L[i]=A
+            inx
+            dec Tmp1                    ; until n-i==0
+            bne .randomI                ; which always swaps the last with itself
             rts
 
 
