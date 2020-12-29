@@ -15,8 +15,10 @@
 ; Usable RAM:  $0120-$0276 (343 bytes) (with stack reduced to $20) / $0293-$02FF (109 bytes)
 ; Note         $01ED-$200 (19 bytes) are squashed during loading
 
+INTRO=1
 DEBUG=1
 !ifndef DEBUG {DEBUG=0}
+!ifndef INTRO {INTRO=0}
 !if DEBUG=1 {
     !initmem $AA
 }
@@ -440,7 +442,6 @@ ReadKeyboard:
 
 ;############################################################################
 *=$0400     ; SCREEN (WILL BE WIPED)
-            !scr "twain pain games" ; 16 bytes TODO
 INIT:
             ; disable IRQ to avoid KERNAL messing with keyboard
             ldy #%01111111
@@ -476,7 +477,11 @@ INIT:
 
             ; TODO setup SID
 
+!if INTRO=1 {
             jmp Logo
+} else {
+            jmp Start
+}
 
 Overwrite01EDCopy:
 ;InitData:
@@ -487,6 +492,15 @@ Overwrite01EDCopy:
     !byte C_POLY_LEADER,C_CANDY_LEADER,C_SOAP_LEADER,C_GOBLIN_LEADER
 SIZEOF_Overwrite01EDCopy=*-Overwrite01EDCopy
 
+*=$0400+3*40+(40-16)/2 ; $0484 above logo so it is still alive
+            !scr "twain pain games" ; 16 bytes
+.fixtwainpain:
+            ldx #15
+            lda #7
+-           sta $d884,x
+            dex
+            bpl -
+            rts
 
 ;############################################################################
 *=$0590     ; DATA (MIDDLE 5 SCREEN LINES ARE HIDDEN)
@@ -535,7 +549,7 @@ Logo:
             inc .colorptr+1
 +           cmp #200
             bne +
-            jsr .stealrts1 ; TODO put TWAIN PAIN GAMES ON SCREEN
+            jsr .fixtwainpain
 +           cmp #$E8 ; end of screen
             bne --
 

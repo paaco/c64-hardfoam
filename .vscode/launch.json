@@ -9,7 +9,7 @@
             "request": "launch",
             "name": "Launch Program",
             "binary": "${workspaceFolder}/.cache/hardfoam.prg",
-            "pc": "$0410"
+            "pc": "$0400"
         }
     ]
 }
