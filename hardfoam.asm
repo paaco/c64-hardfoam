@@ -15,7 +15,7 @@
 ; Usable RAM:  $0120-$0276 (343 bytes) (with stack reduced to $20) / $0293-$02FF (109 bytes)
 ; Note         $01ED-$200 (19 bytes) are squashed during loading
 
-INTRO=1
+INTRO=0
 DEBUG=1
 !ifndef DEBUG {DEBUG=0}
 !ifndef INTRO {INTRO=0}
@@ -76,7 +76,7 @@ CHR_SPACE=32+DEBUG*10 ; space or star
     PD_DECK=32      ; 32 bytes (card#)
 SIZEOF_PD=64
 !addr AIData=$10+SIZEOF_PD
-!addr TmpPlayerSelectData = PlayerData+PD_TABLE
+!addr TmpPlayerSelectData = PlayerData+PD_DECK+10 ; 6 bytes
 !addr Joystick=$90
 !addr Index=$91     ; loop/selection index
 !addr MaxIndex=$92  ; <MaxIndex
@@ -179,7 +179,7 @@ SetCursorY0:
             sty _CursorPos
             sty _ColorPos
             sta _CursorPos+1
-            eor #$DC                    ; turn 4/5/6/7 into $D8/9/a/b
+            eor #$DC                    ; turn 4/5/6/7 into $D8/9/A/B
             sta _ColorPos+1
             ldy #0
             rts
@@ -480,8 +480,29 @@ INIT:
 !if INTRO=1 {
             jmp Logo
 } else {
-            jmp Start
+            jmp LogoDone
 }
+
+LogoDone:
+            ; set color of counters
+            ldx #3-1
+-           lda #COL_HEALTH_ON
+            sta $D800,x
+            sta $D800+24*40,x
+            lda #COL_PLAIN
+            sta $D800+40,x
+            sta $D800+23*40,x
+            dex
+            bpl -
+            jmp Start
+
+.fixtwainpain:
+            ldx #15
+            lda #7
+-           sta $d884,x
+            dex
+            bpl -
+            rts
 
 Overwrite01EDCopy:
 ;InitData:
@@ -492,15 +513,12 @@ Overwrite01EDCopy:
     !byte C_POLY_LEADER,C_CANDY_LEADER,C_SOAP_LEADER,C_GOBLIN_LEADER
 SIZEOF_Overwrite01EDCopy=*-Overwrite01EDCopy
 
+            !fill 23,$EE ; remaining
+
 *=$0400+3*40+(40-16)/2 ; $0484 above logo so it is still alive
             !scr "twain pain games" ; 16 bytes
-.fixtwainpain:
-            ldx #15
-            lda #7
--           sta $d884,x
-            dex
-            bpl -
-            rts
+
+            !fill 252,$EE ; remaining
 
 ;############################################################################
 *=$0590     ; DATA (MIDDLE 5 SCREEN LINES ARE HIDDEN)
@@ -553,21 +571,10 @@ Logo:
 +           cmp #$E8 ; end of screen
             bne --
 
-            ; set color of counters
-            ldx #3-1
--           lda #COL_HEALTH_ON
-            sta $D800,x
-            sta $D800+24*40,x
-            lda #COL_PLAIN
-            sta $D800+40,x
-            sta $D800+23*40,x
-            dex
-            bpl -
-
             jsr DebounceJoystick
 -           jsr ReadJoystick
             beq -
-            bne Start                   ; always
+            jmp LogoDone
 
 .drawlogo:
             ldx #0
@@ -592,6 +599,8 @@ Logo:
             cpx #4*5
             bne --
             rts
+
+            !fill 20,$EE ; remaining
 
 *=$0400+24*40
 logo:       !byte %01100110,%00111110,%11111110,%11111110
@@ -719,12 +728,13 @@ ScreenCreateDeck:
             sta CardIdx
             jsr DrawCardText
 
+            ; fill array with cards belonging to leader
             lda CardIdx                 ; start with leader
-            pha
+            pha                         ; backup
             jsr SetupSelectionDeck
             jsr DrawSelectionDeck
             pla
-            sta CardIdx                 ; restore current leader in CardIdx
+            sta CardIdx                 ; restore
 
             ldy #<($0400+2*40+8)
             lda #>($0400+2*40+8)
@@ -740,33 +750,68 @@ ScreenCreateDeck:
 ; SELECT CARDS
 ;--------------
 ScreenPickCards:
-            ; TODO: put leader in deck
+            lda CardIdx
+            sta PlayerData+PD_DECK
+            inc PlayerData+PD_REMAIN
             jsr ClearUpper
-            ; TODO draw current deck (instead of just leader)
-            ldy #<($0400+2*40+2)
-            lda #>($0400+2*40+2)
-            jsr SetCursorY0
-            jsr DrawCard
 
             lda #GREY
             sta CharCol
+            ldy #<($0400+18)
+            lda #>($0400+18)
+            ldx #T_DECK
+            jsr SetCursorDrawTextX
+
+            ; part 1: select 4 of leader's deck
             ldy #<($0400+15*40+17)
             lda #>($0400+15*40+17)
             ldx #T_PICK_4
             jsr SetCursorDrawTextX
+            jsr PickCards
 
-            ldy #<($0400+17*40+2)
-            lda #>($0400+17*40+2)
-            jsr SetCursorY0
+            ; part 2: select 3 goblins
+            lda #GREY
+            sta CharCol
+            ldy #<($0400+15*40+13)
+            lda #>($0400+15*40+13)
+            ldx #T_PICK_3
+            jsr SetCursorDrawTextX
+            lda #C_GOBLIN_LEADER
+            jsr SetupSelectionDeck
+            jsr DrawSelectionDeck
+            jsr PickCards
+
+            jmp *
+
+PickCards:
             ldx #6
             jsr SetMaxIndexX0
 .redrawcards:
+            jsr DrawPickedDeck
+            lda $0400+15*40+17+6        ; remaining cards digit on screen
+            cmp #'0'
+            beq .stealrts3
+            ldy #<($0400+17*40+2)
+            lda #>($0400+17*40+2)
+            jsr SetCursorY0
+            ; TODO draw card text ($FF is no text)
             jsr SelectCard
             lda Joystick
 +           cmp #%11101111              ; FIRE
-            ;bne .redrawcards            ; always
-            ; TODO Drop Card
-            jmp .redrawcards            ; always
+            bne .redrawcards
+            ; add card to deck
+            ldx Index
+            lda TmpPlayerSelectData,x   ; card#
+            cmp #$FF
+            beq .redrawcards            ; already put
+            ldy PlayerData+PD_REMAIN
+            sta PlayerData+PD_DECK,y
+            inc PlayerData+PD_REMAIN
+            lda #$FF                    ; remove
+            sta TmpPlayerSelectData,x
+            dec $0400+15*40+17+6        ; decrease remaining cards digit on screen
+            jsr DrawSelectionDeck
+            beq .redrawcards            ; always
 
 ; create array with selection deck for leader in A (marks all cards as visible)
 SetupSelectionDeck:
@@ -777,7 +822,6 @@ SetupSelectionDeck:
             dex
             bpl -
             rts
-
 ; draw selection deck card in lower part; if card=$FF then card back is drawn
 DrawSelectionDeck:
             ldy #<($0400+17*40+2)
@@ -787,9 +831,25 @@ DrawSelectionDeck:
 -           ldx Tmp4
             lda TmpPlayerSelectData,x
             jsr DrawCardAOrCardBack
-++          inc Tmp4
+            inc Tmp4
             lda Tmp4
             cmp #6
+            bne -
+.stealrts3: rts
+
+; draw currently picked deck in upper part
+DrawPickedDeck:
+            ldy #<($0400+2*40-1)
+            lda #>($0400+2*40-1)
+            jsr SetCursorY0
+            sty Tmp4
+-           ldx Tmp4
+            lda PlayerData+PD_DECK,x
+            jsr DrawCardAOrEmpty
+            dey
+            inc Tmp4
+            lda Tmp4
+            cmp #8
             bne -
             rts
 
@@ -807,17 +867,6 @@ SelectCard:
             bne +
             jsr DecIndex
 +           jmp ClearCardSelectIndex
-
-;             ldx #10 ; delay a lot
-; --          lda #$84
-; -           cmp $d012
-;             bne -
-;             inc $d020
-; -           cmp $d012
-;             beq -
-;             dec $d020
-;             dex
-;             bne --
 
 
 ;----------------------------------------------------------------------------
@@ -1024,6 +1073,20 @@ ClearCardSelectIndex:
 ; CARD DRAWING
 ;----------------------------------------------------------------------------
 
+; draws table in X at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2,Tmp3,CardIdx,TableIdx)
+DrawTable:
+            lda #5
+            sta Tmp3
+            stx TableIdx
+-           jsr DrawTableCard
+            lda TableIdx
+            clc
+            adc #4
+            sta TableIdx
+            dec Tmp3
+            bne -
+.stealrts1: rts
+
 ; clears the size of a card at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2)
 ClearCard:
             lda #CHR_SPACE
@@ -1042,20 +1105,6 @@ FillCard:
             bne --
             lda #256-40*6+6                 ; fixup position
             jmp AddAToY
-
-; draws table in X at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2,Tmp3,CardIdx,TableIdx)
-DrawTable:
-            lda #5
-            sta Tmp3
-            stx TableIdx
--           jsr DrawTableCard
-            lda TableIdx
-            clc
-            adc #4
-            sta TableIdx
-            dec Tmp3
-            bne -
-.stealrts1: rts
 
 ; draws card on table in TableIdx at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2,CardIdx)
 ; - draws status border, no decoration and highlighted attack/defense
@@ -1112,12 +1161,18 @@ DrawTableCard:
             .drawvaluefixup1=*+1        ; make jsr switchable between PutChar and PutCharNoColor
             jmp PutChar                 ; SELF-MODIFIED
 
-; draws decorated card in A at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2,CardIdx)
+; draws decorated card in A or Empty Card at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2,CardIdx)
+; - draws legend border, full decoration and default attack/defense
+DrawCardAOrEmpty:
+            cmp #$FF
+            beq ClearCard
+            bne .drawcard2
+; draws decorated card in A or Card Back at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2,CardIdx)
 ; - draws legend border, full decoration and default attack/defense
 DrawCardAOrCardBack:
             cmp #$FF
             beq DrawCardBack
-            sta CardIdx
+.drawcard2: sta CardIdx
 ; draws decorated card in CardIdx at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2)
 ; - draws legend border, full decoration and default attack/defense
 DrawCard:
@@ -1301,6 +1356,10 @@ TextData:
     !byte M_PICK,M_LEGENDARY,M_LEADER,0
     T_PICK_4=*-TextData
     !byte M_PICK,M_4,0
+    T_PICK_3=*-TextData
+    !byte M_AND,M_PICK,M_3,M_GOBLIN,0
+    T_DECK=*-TextData
+    !byte M_DECK,0
 !if *-TextData >= $FF { !error "Out of TextData memory" }
 
 ; Text macros, each ends with a byte >= $80
@@ -1318,6 +1377,8 @@ MacroData:
     M_FOREVER     =*-MacroData+1 : !scr "foreve",'r'+$80
     M_BLOCK       =*-MacroData+1 : !scr "bloc",'k'+$80
     M_PICK        =*-MacroData+1 : !scr "pic",'k'+$80
+    M_DECK        =*-MacroData+1 : !scr "dec",'k'+$80
+    M_AND         =*-MacroData+1 : !scr "an",'d'+$80
     M_ALL         =*-MacroData+1 : !scr "al",'l'+$80
     M_4           =*-MacroData+1 : !scr '4'+$80
     M_3           =*-MacroData+1 : !scr '3'+$80
