@@ -134,12 +134,12 @@ NUM_CARDS=SIZEOF_CARDS/5
 
 
 ;----------------------------------------------------------------------------
-; prng
+; PRNG
 ;----------------------------------------------------------------------------
 
-; RANDOM routine from https://codebase64.org/ 16bit eor shift random generator
-; the RNG. You can get 8-bit random numbers in A or 16-bit numbers
-; from the zero page addresses. Leaves X/Y unchanged.
+; Random routine from https://codebase64.org/ 16bit eor shift random generator
+; You can get 8-bit numbers in A or 16-bit numbers from the zero page addresses.
+; Leaves X/Y unchanged. Init ZP_RNG_LOW<>0
 Random:
         lda ZP_RNG_HIGH
         lsr
@@ -518,15 +518,17 @@ SIZEOF_Overwrite01EDCopy=*-Overwrite01EDCopy
 *=$0400+3*40+(40-16)/2 ; $0484 above logo so it is still alive
             !scr "twain pain games" ; 16 bytes
 
-            !fill 252,$EE ; remaining
+            !fill 252,$EE ; remaining WIPED
 
 ;############################################################################
 *=$0590     ; DATA (MIDDLE 5 SCREEN LINES ARE HIDDEN)
 
-            !fill 200,48
+            !fill 200,$EE ; remaining
 
 ;############################################################################
 *=$0658     ; SCREEN (WILL BE WIPED)
+
+            !fill 200,$EE ; remaining WIPED
 
 *=$0658+5*40 ; in lowest 5*40=200 bytes
 Logo:
@@ -600,26 +602,26 @@ Logo:
             bne --
             rts
 
-            !fill 20,$EE ; remaining
+            !fill 20,$EE ; remaining WIPED
 
 *=$0400+24*40
-logo:       !byte %01100110,%00111110,%11111110,%11111110
+logo:       !byte %01100110,%00111110,%01111110,%11111110
             !byte %11100111,%01100111,%11100111,%11100111
             !byte %11111111,%11111111,%11111110,%11100111
             !byte %11100111,%11100111,%11101100,%11100111
-            !byte %01100110,%11100111,%11100111,%11111110
+            !byte %01100110,%01100110,%01100111,%11111110
 
             !byte %01111111,%01111110,%00111110,%11101110
             !byte %11100000,%11100111,%01100111,%11111111
             !byte %11111100,%11100111,%11111111,%11011011
             !byte %11100000,%11100111,%11100111,%11000011
-            !byte %01100000,%01111110,%11100111,%11000011
+            !byte %01100000,%01111110,%01100110,%11000110
 
 ;############################################################################
 *=$07E8     ; CODE
 
 Start:
-            jsr ScreenCreateDeck
+            ;jsr ScreenCreateDeck
 
             jsr DrawHealthBars
             jsr DrawCounters
@@ -629,17 +631,6 @@ Start:
             jsr DrawStackSides
             jsr ClearUpperLines
             jsr ClearLowerLines
-
-            ldy #<($0400+4*40)
-            lda #>($0400+4*40)
-            jsr SetCursorY0
-            jsr DrawCardBack
-
-            ldy #<($0400+15*40)
-            lda #>($0400+15*40)
-            jsr SetCursorY0
-            lda #5 ; card# (goes per 5)
-            jsr DrawCardAOrCardBack
 
             ldy #<($0400+15*40+8)
             lda #>($0400+15*40+8)
@@ -693,7 +684,7 @@ Start:
 ScreenCreateDeck:
             jsr InitPlayersData
             jsr ClearAll
-            lda #YELLOW
+            lda #WHITE
             sta CharCol
             ldy #<($0400+0*40+9)
             lda #>($0400+0*40+9)
@@ -755,7 +746,7 @@ ScreenPickCards:
             inc PlayerData+PD_REMAIN
             jsr ClearUpper
 
-            lda #GREY
+            lda #WHITE
             sta CharCol
             ldy #<($0400+18)
             lda #>($0400+18)
@@ -770,7 +761,7 @@ ScreenPickCards:
             jsr PickCards
 
             ; part 2: select 3 goblins
-            lda #GREY
+            lda #WHITE
             sta CharCol
             ldy #<($0400+15*40+13)
             lda #>($0400+15*40+13)
@@ -780,6 +771,10 @@ ScreenPickCards:
             jsr SetupSelectionDeck
             jsr DrawSelectionDeck
             jsr PickCards
+
+            ; part 3: setup deck TODO shuffle
+            ldx #PlayerData+PD_DECK     ; ZP offset to deck (should be divisible by $10)
+            jsr UnpackDeck
 
             jmp *
 
@@ -886,6 +881,40 @@ InitPlayersData:
             sta AIData,x
             dex
             bpl -
+            rts
+
+; expands 8 byte card deck at X in ZP to 28 cards (clobbers A,X,Y)
+UnpackDeck:
+            lda $00,x                   ; leader
+            pha                         ; backup
+            stx .leaderptr
+            txa
+            clc
+            adc #28-1
+            tay                         ; Y=X+28-1
+            txa
+            ora #$07
+            tax
+-           lda $00,x
+            sta $00,y
+            dey
+            tya
+            and #%00000011              ; check lower 2 bits
+            cmp #(28-1)&%00000011       ; NOTE: THIS ONLY WORKS IF DECK IS LOCATED DIVISIBLE BY $10
+            bne -
+            dex
+            txa
+            and #$07
+            bne -
+            ; put leader in random place
+.random027: jsr Random ; 0-255
+            and #$1f   ; 0-31
+            cmp #(28-1)+1
+            bcs .random027
+            tax
+            pla
+            .leaderptr=*+1
+            sta $00,x
             rts
 
 
