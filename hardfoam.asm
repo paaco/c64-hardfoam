@@ -523,7 +523,78 @@ SIZEOF_Overwrite01EDCopy=*-Overwrite01EDCopy
 ;############################################################################
 *=$0590     ; DATA (MIDDLE 5 SCREEN LINES ARE HIDDEN)
 
-            !fill 200,$EE ; remaining
+;----------------------------------------------------------------------------
+; GAME FUNCTIONS
+;----------------------------------------------------------------------------
+
+InitPlayersData:
+            ldx #SIZEOF_PD-1
+-           lda #$FF
+            sta PlayerData,x
+            sta AIData,x
+            dex
+            cpx #SIZEOF_INITDATA-1
+            bne -
+-           lda InitData,x
+            sta PlayerData,x
+            sta AIData,x
+            dex
+            bpl -
+            rts
+
+; expands and shuffles PlayerData deck from 8 bytes to 28 cards
+UnpackAndShuffleDeck:
+            lda PlayerData+PD_DECK      ; leader
+            pha                         ; backup
+            ldx #7
+            ldy #28-1
+-           lda PlayerData+PD_DECK,x
+            sta PlayerData+PD_DECK,y
+            dey
+            tya
+            and #%00000011              ; use lower 2 bits
+            cmp #(28-1)&%00000011       ; to loop 4 times
+            bne -
+            dex
+            bne -
+            ; put leader in random place
+.random027: jsr Random ; 0-255
+            and #$1f   ; 0-31
+            cmp #(28-1)+1
+            bcs .random027
+            tax
+            pla
+            sta PlayerData+PD_DECK,x
+            ; fall through
+
+; Knuth Fisher-Yates shuffle
+;    for i in range(0, n-1) inclusive:
+;       j = i + random(0, n-1 - i) inclusive
+;       swap L[i], L[j]
+ShuffleDeck:
+            ldx #0                      ; i
+            lda #(28-1)+1               ; deck size
+            sta Tmp1                    ; "n-1"
+.randomI:   jsr Random                  ; 0-255
+            and #$1f                    ; 0-31
+            cmp Tmp1
+            bcs .randomI                ; 0..Tmp2-1
+            stx Tmp2                    ; i
+            clc
+            adc Tmp2                    ; A = j = i + random(0, n-1-i)
+            ; swap L[i], L[j]
+            ldy PlayerData+PD_DECK,x    ; Y=L[i]
+            tax
+            lda PlayerData+PD_DECK,x    ; A=L[j]
+            sty PlayerData+PD_DECK,x    ; L[j]=L[i]
+            ldx Tmp2
+            sta PlayerData+PD_DECK,x    ; L[i]=A
+            inx
+            dec Tmp1                    ; until n-i==0
+            bne .randomI                ; which always swaps the last with itself
+            rts
+
+            !fill 103,$EE ; remaining
 
 ;############################################################################
 *=$0658     ; SCREEN (WILL BE WIPED)
@@ -707,13 +778,6 @@ ScreenCreateDeck:
             ldy #<($0400+8*40+8)
             lda #>($0400+8*40+8)
             jsr SetCursorY0
-            ; wipe previous text
-            lda #CHR_SPACE
--           sta (_CursorPos),y
-            iny
-            cpy #72
-            bne -
-            ldy #0
             ldx Index
             lda SuitLeaders,x
             sta CardIdx
@@ -786,7 +850,7 @@ PickCards:
             jsr SetMaxIndexX0
 .redrawcards:
             jsr DrawPickedDeck
-            lda $0400+15*40+17+6        ; remaining cards digit on screen
+            lda $0400+15*40+17+6        ; cards to pick digit on screen
             cmp #'0'
             beq .stealrts3
             ldy #<($0400+17*40+2)
@@ -807,7 +871,7 @@ PickCards:
             inc PlayerData+PD_REMAIN
             lda #$FF                    ; remove
             sta TmpPlayerSelectData,x
-            dec $0400+15*40+17+6        ; decrease remaining cards digit on screen
+            dec $0400+15*40+17+6        ; decrease cards to pick digit on screen
             jsr DrawSelectionDeck
             beq .redrawcards            ; always
 
@@ -866,78 +930,6 @@ SelectCard:
             bne +
             jsr DecIndex
 +           jmp ClearCardSelectIndex
-
-
-;----------------------------------------------------------------------------
-; GAME FUNCTIONS
-;----------------------------------------------------------------------------
-
-InitPlayersData:
-            ldx #SIZEOF_PD-1
--           lda #$FF
-            sta PlayerData,x
-            sta AIData,x
-            dex
-            cpx #SIZEOF_INITDATA-1
-            bne -
--           lda InitData,x
-            sta PlayerData,x
-            sta AIData,x
-            dex
-            bpl -
-            rts
-
-; expands and shuffles PlayerData deck from 8 bytes to 28 cards
-UnpackAndShuffleDeck:
-            lda PlayerData+PD_DECK      ; leader
-            pha                         ; backup
-            ldx #7
-            ldy #28-1
--           lda PlayerData+PD_DECK,x
-            sta PlayerData+PD_DECK,y
-            dey
-            tya
-            and #%00000011              ; use lower 2 bits
-            cmp #(28-1)&%00000011       ; to loop 4 times
-            bne -
-            dex
-            bne -
-            ; put leader in random place
-.random027: jsr Random ; 0-255
-            and #$1f   ; 0-31
-            cmp #(28-1)+1
-            bcs .random027
-            tax
-            pla
-            sta PlayerData+PD_DECK,x
-            ; fall through
-
-; Knuth Fisher-Yates shuffle
-;    for i in range(0, n-1) inclusive:
-;       j = i + random(0, n-1 - i) inclusive
-;       swap L[i], L[j]
-ShuffleDeck:
-            ldx #0                      ; i
-            lda #(28-1)+1               ; deck size
-            sta Tmp1                    ; "n-1"
-.randomI:   jsr Random                  ; 0-255
-            and #$1f                    ; 0-31
-            cmp Tmp1
-            bcs .randomI                ; 0..Tmp2-1
-            stx Tmp2                    ; i
-            clc
-            adc Tmp2                    ; A = j = i + random(0, n-1-i)
-            ; swap L[i], L[j]
-            ldy PlayerData+PD_DECK,x    ; Y=L[i]
-            tax
-            lda PlayerData+PD_DECK,x    ; A=L[j]
-            sty PlayerData+PD_DECK,x    ; L[j]=L[i]
-            ldx Tmp2
-            sta PlayerData+PD_DECK,x    ; L[i]=A
-            inx
-            dec Tmp1                    ; until n-i==0
-            bne .randomI                ; which always swaps the last with itself
-            rts
 
 
 ;----------------------------------------------------------------------------
@@ -1165,7 +1157,6 @@ DrawTableCard:
             cmp #$FF
             beq ClearCard
 +           sta CardIdx
-            tax
             jsr SetFrameCharCol
             lda #<PutChar               ; enable color write
             sta .drawvaluefixup1
@@ -1227,7 +1218,6 @@ DrawCardAOrCardBack:
 ; draws decorated card in CardIdx at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2)
 ; - draws legend border, full decoration and default attack/defense
 DrawCard:
-            ldx CardIdx
             jsr SetFrameCharCol
             jsr DrawCardTopFrameDecorated
 .drawcard1: ldx CardIdx
@@ -1235,7 +1225,6 @@ DrawCard:
             jsr DrawCardBottomDecoration
             lda #92                             ; move to glyph position
             jsr AddAToY
-            ldx CardIdx
             jsr SetSuitCharCol
             lda Cards+CARD_GLYPH,x
             tax
@@ -1246,8 +1235,16 @@ DrawCard:
 ; draws text of card in CardIdx at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2)
 DrawCardText:
             sty Tmp2
-            ldx CardIdx
+            ; wipe previous text
+            ldx #0
+            lda #CHR_SPACE
+-           sta (_CursorPos),y
+            iny
+            inx
+            cpx #72
+            bne -
             jsr SetSuitCharCol
+            ldy Tmp2
             lda Cards+CARD_NAME,x
             jsr DrawText
             ldy Tmp2
@@ -1328,8 +1325,9 @@ DrawCardBottomDecoration:
 +           ora #$B0                    ; reversed digit
             jmp MovePutChar
 
-; sets color to frame color (legend/plain) based on LTSC value of Card in X (leaves LTSC value in A)
+; sets color to frame color (legend/plain) based on LTSC value of CardIdx (leaves CardIdx in X and LTSC value in A)
 SetFrameCharCol:
+            ldx CardIdx
             lda Cards+CARD_LTSC,x
             pha
             bmi + ; legend
@@ -1340,8 +1338,9 @@ SetFrameCharCol:
             pla
             rts
 
-; sets color to suit color based on LTSC value of Card in X (clobbers A)
+; sets color to suit color based on LTSC value of CardIdx (clobbers A) (leaves CardIdx in X)
 SetSuitCharCol:
+            ldx CardIdx
             lda Cards+CARD_LTSC,x
             lsr
             lsr
