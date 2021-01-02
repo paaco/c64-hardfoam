@@ -34,3 +34,26 @@ To create a deck:
 If you choose the black legendary, your deck will automatically consist of all blacks.
 
 The deck will consist of the 7 x 4 selected cards, with 1 randomly replaced by the legendary.
+
+
+# Memory Map
+
+*=$0120     ; DATA (0120-01ED = 282 bytes)
+
+*=$01ED     ; DATA 13 bytes including return address (TRASHED WHILE LOADING)
+
+*=$01FA     ; DATA (01FA-0314 = 282 bytes)
+
+*=$028D     ; 028D-028E (2 bytes) TRASHED DURING LOADING
+
+*=$02A1     ; RS232 Enables SHOULD STAY 0 DURING LOADING!
+
+*=$0314     ; IRQ, BRK and NMI Vectors to keep
+
+*=$032A     ; DATA (032A-0400 = 214 bytes)
+
+*=$0590     ; DATA (200 bytes, MIDDLE 5 SCREEN LINES ARE HIDDEN)
+
+*=$07E8     ; CODE
+
+*=$1000     ; EOF
