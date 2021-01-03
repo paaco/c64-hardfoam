@@ -94,7 +94,7 @@ DrawF_Frame:
             inx
             cmp #$60                    ; $60/96 (SHIFT-SPACE) skips
             beq +
-_DrawCharA:
+DrawCharA:
             sta (_CursorPos),y
             lda CharCol
             sta (_ColorPos),y
@@ -113,7 +113,7 @@ DrawF_Glyph:
 
 DrawF_Clear:
             lda #CHR_SPACE
-            bne _DrawCharA              ; always
+            bne DrawCharA               ; always
 
 !if (>DrawF_Frame != >DrawF_Frame) { !error "All DrawF functions must be in same page" }
 
@@ -166,7 +166,48 @@ SetCursor:
             sta _ColorPos+1
             rts
 
-            !fill 118,$EE ; remaining
+;----------------------------------------------------------------------------
+; TEXT DRAWING
+;----------------------------------------------------------------------------
+
+; ; puts cursor at Y/A Y=low byte, A=high byte and sets Y=0 and draws text in X (clobbers A,X,Y,Tmp1)
+; SetCursorDrawTextX:
+;             jsr SetCursorY0
+;             txa
+; draws text A at Cursor + Y (clobbers A,X,Y,Tmp1)
+DrawText:
+            tax
+; draws text X at Cursor + Y (clobbers A,X,Y,Tmp1)
+DrawTextX:
+--          lda TextData,x
+            beq ++                      ; text ends with 0
+            ; draw macro in A
+            stx Tmp1
+            cmp #M_SUIT                 ; M_SUIT is replaced with text version
+            bne +
+            ldx Suit
+            lda SuitTextData,x
++           tax
+-           lda MacroData-1,x
+            bpl +
+            and #$7F                    ; last character
+            ldx #$FF                    ; ends loop
++           sta (_CursorPos),y
+            lda SuitCol
+            sta (_ColorPos),y
+            iny
+            inx
+            bne -
+            ldx Tmp1
+            lda TextData+1,x            ; lookahead
+            beq ++                      ; text ends directly with 0
+            jsr DrawF_Clear             ; put space
+            iny
+            inx
+            bne --
+++          rts
+
+            !fill 66,$EE ; remaining
 
 ;############################################################################
 *=$01ED     ; DATA 13 bytes including return address (TRASHED WHILE LOADING)
@@ -179,56 +220,16 @@ SIZEOF_INITDATA = *-InitData
 
 SuitTextData:
     !byte M_GOBLIN,M_POLYSTYRENE,M_CANDY,M_SOAP
-SuitLeaders:
-    !byte C_POLY_LEADER,C_CANDY_LEADER;,C_SOAP_LEADER,C_GOBLIN_LEADER
+;SuitLeaders:
+;    !byte C_POLY_LEADER,C_CANDY_LEADER;,C_SOAP_LEADER,C_GOBLIN_LEADER
+
+            !fill 2,$EE ; remaining (+2 that can be overwritten)
 
 *=$01F8     ; Override return value on stack with own start address
             !word INIT-1
 
 ;############################################################################
 *=$01FA     ; DATA (01FA-0314 = 282 bytes)
-
-;----------------------------------------------------------------------------
-; BASIC DRAWING
-;----------------------------------------------------------------------------
-
-; ; puts cursor at Y/A Y=low byte, A=high byte and sets Y=0 and draws text in X (clobbers A,X,Y,Tmp1)
-; SetCursorDrawTextX:
-;             jsr SetCursorY0
-;             txa
-; ; draws text A at cursor + Y+1 (clobbers A,X,Y,Tmp1)
-; DrawText:
-;             tax
-; ; draws text X at cursor + Y+1 (clobbers A,X,Y,Tmp1)
-; DrawTextX:
-; -           lda TextData,x
-;             beq +                       ; text ends with 0
-;             jsr DrawMacro
-;             lda TextData+1,x            ; lookahead
-;             beq +                       ; text ends directly with 0
-;             lda #CHR_SPACE
-;             jsr MovePutChar
-;             inx
-;             bne -
-; +           rts
-
-; ; draws macro A (1..255) at cursor + Y+1 (clobbers A,Y,Tmp1)
-; DrawMacro:
-;             stx Tmp1
-;             cmp #M_SUIT
-;             bne +
-;             ldx Suit
-;             lda SuitTextData,x
-; +           tax
-; -           lda MacroData-1,x
-;             bpl ++
-;             and #$7F                    ; last character
-;             ldx #$FF                    ; ends loop
-; ++          jsr MovePutChar
-;             inx
-;             bne -
-;             ldx Tmp1
-;             rts
 
 ; ; set X and Index to Index-1 loop around (Index=0..MaxIndex-1) (clobbers X)
 ; DecIndex:
@@ -238,6 +239,8 @@ SuitLeaders:
 ; +           dex
 ;             stx Index
 ;             rts
+
+            !fill 147,$EE ; remaining
 
 ;############################################################################
 *=$028D     ; 028D-028E (2 bytes) TRASHED DURING LOADING
@@ -449,7 +452,7 @@ Overwrite01EDCopy:
 ;SuitTextData:
     !byte M_GOBLIN,M_POLYSTYRENE,M_CANDY,M_SOAP
 ;SuitLeaders:
-    !byte C_POLY_LEADER,C_CANDY_LEADER,C_SOAP_LEADER,C_GOBLIN_LEADER
+;    !byte C_POLY_LEADER,C_CANDY_LEADER,C_SOAP_LEADER,C_GOBLIN_LEADER
 SIZEOF_Overwrite01EDCopy=*-Overwrite01EDCopy
 
             ;!fill 23,$EE ; remaining WIPED DEBUG
@@ -657,10 +660,12 @@ Start:
             ldy #<($0400+15*40+8)
             lda #>($0400+15*40+8)
             jsr SetCursor
-            ldx #C_POLY_LEADER
+            ldx #C_GOBLIN_LEADER
             jsr DrawCard
-            lda #6
-            jsr AddCursor
+            ldx #C_GOBLIN_LEADER
+            ldy #<($0400+21*40+8)
+            lda #>($0400+21*40+8)
+            jsr SetCursorDrawCardText
 
             ; jsr ScreenCreateDeck
 
@@ -1138,20 +1143,8 @@ DrawTableCard:
 +           sta CharCol                 ; SELF-MODIFIED $85=STA $24=BIT
             lda TD_ATK,x
             ora #$30                    ; regular digits
-            jmp _DrawCharA
+            jmp DrawCharA
 
-; ; draws decorated card in A or Empty Card at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2,CardIdx)
-; ; - draws legend border, full decoration and default attack/defense
-; DrawCardAOrEmpty:
-;             cmp #$FF
-;             beq ClearCard
-;             bne .drawcard2
-; ; draws decorated card in A or Card Back at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2,CardIdx)
-; ; - draws legend border, full decoration and default attack/defense
-; DrawCardAOrCardBack:
-;             cmp #$FF
-;             beq DrawCardBack
-; .drawcard2: sta CardIdx
 ; draws decorated card in X at Cursor (clobbers A,X,Y)
 ; - draws legend border, full decoration and default attack/defense
 DrawCard:
@@ -1217,29 +1210,24 @@ SetColors:
             sta SuitCol
 .stealrts1: rts
 
-; ; draws text of card in CardIdx at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2)
-; DrawCardText:
-;             sty Tmp2
-;             ; wipe previous text
-;             ldx #0
-;             lda #CHR_SPACE
-; -           sta (_CursorPos),y
-;             iny
-;             inx
-;             cpx #72
-;             bne -
-;             jsr SetSuitCharCol
-;             ldy Tmp2
-;             lda Cards+CARD_NAME,x
-;             jsr DrawText
-;             ldy Tmp2
-;             lda #40
-;             jsr AddAToY
-;             ldx CardIdx
-;             lda Cards+CARD_EFFECT,x
-;             jmp DrawText
+; puts cursor at Y/A Y=low byte, A=high byte, draw text of card in X (clobbers A,X,Y,Tmp1)
+SetCursorDrawCardText:
+            jsr SetCursor
+; draws text of card in X at Cursor (clobbers A,X,Y,Tmp1)
+DrawCardText:
+            txa
+            pha                         ; backup X
+            jsr SetColors
+            ldy #0
+            lda Cards+CARD_NAME,x
+            jsr DrawText
+            pla
+            tax                         ; restore X
+            ldy #40
+            lda Cards+CARD_EFFECT,x
+            jmp DrawText
 
-; draws card background at cursor (clobbers A,X,Y)
+; draws card background at Cursor (clobbers A,X,Y)
 DrawCardBack:
             lda #GREY
             sta CharCol
