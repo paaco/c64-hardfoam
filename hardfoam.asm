@@ -64,7 +64,7 @@ CHR_SPACE=32+DEBUG*10 ; space or star
     PD_MAXENERGY=3  ; $30 .. $39
     PD_REMAIN=4     ; DECKSIZE-1 .. 0
     PD_HAND=5       ; 7 bytes (card#), >=$80=no card
-    PD_TABLE=12     ; 20 bytes 5*4 bytes (card#,atd,def,status) TODO: SoA
+    PD_TABLE=12     ; 20 bytes 5*4 bytes (card#,atd,def,status)
       TD_CARD=0     ; card# >=$80=no card
       TD_ATK=1      ; attack
       TD_DEF=2      ; defense
@@ -73,11 +73,11 @@ CHR_SPACE=32+DEBUG*10 ; space or star
     PD_DECK=32      ; 32 bytes (card#)
 SIZEOF_PD=64
 !addr AIData=$10+SIZEOF_PD
-!addr Index=$90     ; loop/selection index
-!addr MaxIndex=$91  ; <MaxIndex
-!addr CardIdx=$92
-!addr TableIdx=$93
-!addr CardYIndex=$94; Y offset used for DrawCardSelect/ClearCardSelect
+;!addr Index=$90     ; loop/selection index
+;!addr MaxIndex=$91  ; <MaxIndex
+;!addr CardIdx=$92
+;!addr TableIdx=$93
+;!addr CardYIndex=$94; Y offset used for DrawCardSelect/ClearCardSelect
 ; Draws rectangle 5x5 (upto 8x6) via DrawF function (clobbers A,Y)
 !addr _Draw=$E0     ; $E0-$F8 is block drawing routine
 
@@ -94,6 +94,7 @@ DrawF_Frame:
             inx
             cmp #$60                    ; $60/96 (SHIFT-SPACE) skips
             beq +
+_DrawCharA:
             sta (_CursorPos),y
             lda CharCol
             sta (_ColorPos),y
@@ -109,6 +110,10 @@ DrawF_Glyph:
             sta (_ColorPos),y
             dey
             rts
+
+DrawF_Clear:
+            lda #CHR_SPACE
+            bne _DrawCharA              ; always
 
 !if (>DrawF_Frame != >DrawF_Frame) { !error "All DrawF functions must be in same page" }
 
@@ -131,6 +136,8 @@ _Configure:
 ConfigData:
     CFG_FRAME=*-ConfigData
     !byte <DrawF_Frame,5,6*40   ; 5x6 card
+    CFG_CLEARFRAME=*-ConfigData
+    !byte <DrawF_Clear,5,6*40   ; 5x6 clear
     CFG_GLYPH=*-ConfigData
     !byte <DrawF_Glyph,3,4*40   ; 3x3 glyph drawn at offset +41
 
@@ -143,34 +150,23 @@ DrawWithOffset:
             tax
             jmp _Draw+2
 
-; puts cursor at Y/A Y=low byte, A=high byte and sets Y=0 (clobbers A,Y)
-SetCursorY0:
+; adds A to cursor (clobbers A,Y)
+AddCursor:
+            clc
+            adc _CursorPos
+            tay
+            lda #0
+            adc _CursorPos+1
+; puts cursor at Y/A Y=low byte, A=high byte (clobbers A)
+SetCursor:
             sty _CursorPos
             sty _ColorPos
             sta _CursorPos+1
             eor #$DC                    ; turn 4/5/6/7 into $D8/9/A/B
             sta _ColorPos+1
-            ldy #0
             rts
 
-; TODO add value to cursor
-
-; ; moves cursor down and draws char in A at cursor+Y with color CharCol (clobbers A)
-; PutCharMoveDown:
-;             jsr PutChar
-; ; moves cursor down a row (clobbers A)
-; MoveCursorDown:
-;             lda _CursorPos
-;             clc
-;             adc #40
-;             sta _CursorPos
-;             sta _ColorPos
-;             bcc +
-;             inc _CursorPos+1
-;             inc _ColorPos+1
-; +           rts
-
-            !fill 131,$EE ; remaining
+            !fill 118,$EE ; remaining
 
 ;############################################################################
 *=$01ED     ; DATA 13 bytes including return address (TRASHED WHILE LOADING)
@@ -234,15 +230,6 @@ SuitLeaders:
 ;             ldx Tmp1
 ;             rts
 
-; ; (0-5) table for position card selection symbols around card
-; CardSelectionYOffsets:
-;             !byte 0*6 + 2*40-1
-;             !byte 1*6 + 2*40-1
-;             !byte 2*6 + 2*40-1
-;             !byte 3*6 + 2*40-1
-;             !byte 4*6 + 2*40-1
-;             !byte 5*6 + 2*40-1
-
 ; ; set X and Index to Index-1 loop around (Index=0..MaxIndex-1) (clobbers X)
 ; DecIndex:
 ;             ldx Index
@@ -271,7 +258,7 @@ SuitLeaders:
 ; .setidx:    stx Index
 ;             rts
 
-            !fill 4,$EE ; remaining
+            !fill 18,$EE ; remaining
 
 ;############################################################################
 *=$02A1     ; RS232 Enables SHOULD STAY 0 DURING LOADING!
@@ -669,9 +656,11 @@ logo:       !byte %01100110,%00111110,%01111110,%11111110
 Start:
             ldy #<($0400+15*40+8)
             lda #>($0400+15*40+8)
-            jsr SetCursorY0
+            jsr SetCursor
             ldx #C_POLY_LEADER
             jsr DrawCard
+            lda #6
+            jsr AddCursor
 
             ; jsr ScreenCreateDeck
 
@@ -684,19 +673,21 @@ Start:
             ; jsr ClearUpperLines
             ; jsr ClearLowerLines
 
-            ; ldy #<($0400+15*40+8)
-            ; lda #>($0400+15*40+8)
-            ; jsr SetCursorY0
-            ; ldx #PlayerData+PD_TABLE ; zP offset into table (increases per 4)
-            ; ; setup card on table
-            ; lda #0 ; card# (goes per 5)
-            ; sta TD_CARD,x
-            ; lda #$81 ; tapped=1,selected=$80
-            ; sta TD_STATUS,x
-            ; lda #3
-            ; sta TD_ATK,x
-            ; lda #1
-            ; sta TD_DEF,x
+            ldy #<($0400+15*40+28)
+            lda #>($0400+15*40+28)
+            jsr SetCursor
+            ldy #PlayerData+PD_TABLE ; ZP offset into table (increases per SIZEOF_PD)
+            ; setup card on table
+            lda #C_GOBLIN_LEADER+5 ; card# (goes per 5)
+            sta TD_CARD,y
+            lda #1 ; tapped=1
+            sta TD_STATUS,y
+            lda #1
+            sta TD_ATK,y
+            lda #2
+            sta TD_DEF,y
+            jsr DrawTableCard
+
             ; ; setup card on table
             ; lda #5 ; card# (goes per 5)
             ; sta TD_CARD+4,x
@@ -1097,92 +1088,57 @@ Start:
 ; CARD DRAWING
 ;----------------------------------------------------------------------------
 
-; ; draws table in X at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2,Tmp3,CardIdx,TableIdx)
-; DrawTable:
-;             lda #5
-;             sta Tmp3
-;             stx TableIdx
-; -           jsr DrawTableCard
-;             lda TableIdx
-;             clc
-;             adc #4
-;             sta TableIdx
-;             dec Tmp3
-;             bne -
-; .stealrts1: rts
-
-; ; clears the size of a card at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2)
-; ClearCard:
-;             lda #CHR_SPACE
-; ; fills the size of a card with A at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2)
-; FillCard:
-;             ldx #6
-;             stx Tmp2
-; --          ldx #5
-; -           jsr MovePutChar
-;             dex
-;             bne -
-;             pha
-;             jsr AddFrameModuloToY
-;             pla
-;             dec Tmp2
-;             bne --
-;             lda #256-40*6+6                 ; fixup position
-;             jmp AddAToY
-
-; ; draws card on table in TableIdx at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2,CardIdx)
-; ; - draws status border, no decoration and highlighted attack/defense
-; DrawTableCard:
-;             ldx TableIdx
-;             lda TD_CARD,x
-;             cmp #$FF
-;             beq ClearCard
-; +           sta CardIdx
-;             jsr SetFrameCharCol
-;             lda #<PutChar               ; enable color write
-;             sta .drawvaluefixup1
-;             ; use disabled color when tapped
-;             ldx TableIdx
-;             lda TD_STATUS,x             ; 0=normal, $1=tapped, DISABLED: >=$80 selected
-;             beq +
-;             ;bmi .selected
-;             lda #COL_DISABLED
-;             ;bne ++                      ; always
-; ;.selected:  lda #COL_SELECTED
-; ++          sta CharCol
-;             lda #<PutCharNoColor        ; disable color write
-;             sta .drawvaluefixup1
-; +           jsr DrawCardTopFrame
-;             jsr .drawcard1              ; draw remainder of card
-;             ; overwrite card values with actuals
-;             lda #40*5-4
-;             jsr AddAToY
-;             ; update attack value
-;             ldx TableIdx
-;             jsr .drawvalue
-;             ; update defense value
-;             inx ; CAREFUL: THIS ASSUMES DEFENSE COMES DIRECTLY AFTER ATTACK IN MEMORY
-;             iny
-;             iny
-;             iny
-;             jsr .drawvalue
-;             lda #256-40*5+1             ; fixup position
-;             jmp AddAToY
-; ; common code to read screen to determine high/low/same, X=table index
-; .drawvalue:
-;             lda (_CursorPos),y
-;             and #$0F
-;             cmp TD_ATK,x                ; CARDATK-ACTUALATK Z=1:equal, C=1 actual<card C=0 actual>card
-;             beq .stealrts1              ; done
-;             bcc .higher
-;             lda #COL_LOWER
-;             bne +                       ; always
-; .higher:    lda #COL_HIGHER
-; +           sta CharCol
-;             lda TD_ATK,x
-;             ora #$30                    ; regular digits
-;             .drawvaluefixup1=*+1        ; make jsr switchable between PutChar and PutCharNoColor
-;             jmp PutChar                 ; SELF-MODIFIED
+; draws card on table in Y at Cursor (clobbers A,X,Y)
+; - draws status border, no decoration and highlighted attack/defense
+DrawTableCard:
+            ldx TD_CARD,y
+            cmp #$FF
+            bne +
+            ldx #CFG_CLEARFRAME         ; clear card
+            jmp Draw
++           jsr DecorateFrame
+            ; hide type/cost
+            lda #79                     ; left corner
+            sta frame_TYPE
+            lda #119                    ; top line
+            sta frame_COST
+            ; override colors if tapped
+            lda #$85                    ; STA
+            sta .fixupcolorwrite        ; enable color write
+            lda TD_STATUS,y             ; 0=normal, 1=tapped
+            beq +
+            lda #COL_DISABLED
+            sta CharCol
+            sta SuitCol
+            lda #$24                    ; BIT
+            sta .fixupcolorwrite        ; disable color write
++           tya                         ; backup card in Y
+            pha
+            jsr .drawglyphframe
+            pla
+            tax                         ; restore card to X
+            ; update attack value with actual
+            ldy #5*40+1                 ; ATK position
+            jsr .updateatkdef
+            ; update defense value with actual
+            inx ; CAREFUL: THIS ASSUMES DEFENSE COMES DIRECTLY AFTER ATTACK IN MEMORY
+            ldy #5*40+4                 ; DEF position
+            ; fall through
+; common code to read screen to determine high/low/same, X=table index
+.updateatkdef:
+            lda (_CursorPos),y
+            and #$0F
+            cmp TD_ATK,x
+            beq .stealrts1              ; same -> done
+            bcc .higher
+            lda #COL_LOWER
+            bne +                       ; always
+.higher:    lda #COL_HIGHER
+            .fixupcolorwrite=*
++           sta CharCol                 ; SELF-MODIFIED $85=STA $24=BIT
+            lda TD_ATK,x
+            ora #$30                    ; regular digits
+            jmp _DrawCharA
 
 ; ; draws decorated card in A or Empty Card at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2,CardIdx)
 ; ; - draws legend border, full decoration and default attack/defense
@@ -1199,6 +1155,18 @@ Start:
 ; draws decorated card in X at Cursor (clobbers A,X,Y)
 ; - draws legend border, full decoration and default attack/defense
 DrawCard:
+            jsr DecorateFrame
+.drawglyphframe:
+            lda Cards+CARD_GLYPH,x
+            ldx #CFG_GLYPH
+            ldy #40
+            jsr DrawWithOffset
+            lda #FRAME_CARD
+            ldx #CFG_FRAME
+            jmp Draw
+
+; decorates top and bottom of frame according to card in X (clobbers A)
+DecorateFrame:
             ; setup type/cost
             lda Cards+CARD_LTSC,x
             pha
@@ -1211,7 +1179,10 @@ DrawCard:
             and #%00001111              ; LTSSCCCC
             ora #$B0                    ; 0..9 reversed
             sta frame_COST
+            ; fall through
 
+; decorates bottom of frame according to card in X (clobbers A)
+DecorateBottomFrame:
             ; setup ATK/DEF
             lda Cards+CARD_ATDF,x
             pha
@@ -1225,27 +1196,26 @@ DrawCard:
             lsr
             ora #$B0
             sta frame_ATK
+            ; fall through
 
+; sets CharCol and SuitCol according to card in X (clobbers A)
+SetColors:
             ; setup colors
-            ldy #COL_LEGEND
+            lda #COL_LEGEND
+            sta CharCol
             lda Cards+CARD_LTSC,x
+            pha
             bmi + ; legend
-            ldy #COL_PLAIN
-+           sty CharCol
+            lda #COL_PLAIN
+            sta CharCol
++           pla
             lsr
             lsr
             lsr
             lsr
             and #$03
             sta SuitCol
-
-            lda Cards+CARD_GLYPH,x
-            ldx #CFG_GLYPH
-            ldy #40
-            jsr DrawWithOffset
-            lda #FRAME_CARD
-            ldx #CFG_FRAME
-            jmp Draw
+.stealrts1: rts
 
 ; ; draws text of card in CardIdx at cursor + Y+1 (clobbers A,X,Y,Tmp1,Tmp2)
 ; DrawCardText:
