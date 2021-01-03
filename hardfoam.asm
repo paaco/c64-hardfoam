@@ -12,6 +12,24 @@
 ; Holes at $1ED-$01F9, $028D,$028E, $02A1, $0314-$032A (vectors) and $0400-$07E8 (screen)
 ; Keeping 5 screen rows for code adds 200 bytes
 
+; TODO: create 4 default decks with 2 letter names: BD,JT,MG,RH
+; TODO: player selects 1 of 4 default decks
+; TODO: AI picks random 1 of 4 default decks with name
+; TODO: create 2 shuffled decks
+; TODO: draw upper hand (# partialcardbacks)
+; TODO: draw lower hand (# partialcards)
+; TODO: draw counters
+; TODO: draw lifebars
+; TODO: turn: take a card; if you now have 7 cards, discard one
+; TODO: turn: play cards from your hand
+; TODO: turn: attack with table cards (pick your own order, attack not required)
+; TODO: end turn
+; TODO: AI turn: take card; if necessary discard the (first)) most expensive one
+; TODO: AI turn: while possible, play random cards from hand
+; TODO: AI turn: with each table card, attack random table card
+; TODO: AI turn: if there are no opponent table cards left, attack player
+; TODO: AI end turn
+
 INTRO=0
 DEBUG=1
 !ifndef DEBUG {DEBUG=0}
@@ -140,6 +158,10 @@ ConfigData:
     !byte <DrawF_Clear,5,6*40   ; 5x6 clear
     CFG_GLYPH=*-ConfigData
     !byte <DrawF_Glyph,3,4*40   ; 3x3 glyph drawn at offset +41
+    CFG_FRAME2=*-ConfigData
+    !byte <DrawF_Frame,5,2*40   ; 5x2 card
+    CFG_GLYPH2=*-ConfigData
+    !byte <DrawF_Glyph,3,2*40   ; 3x1 glyph drawn at offset +41
 
 ; configures Draw function with X=config and Draws with A=srcoffset, Y=0(dstoffset) (clobbers A,X,Y)
 Draw:
@@ -207,7 +229,7 @@ DrawTextX:
             bne --
 ++          rts
 
-            !fill 66,$EE ; remaining
+            !fill 60,$EE ; remaining
 
 ;############################################################################
 *=$01ED     ; DATA 13 bytes including return address (TRASHED WHILE LOADING)
@@ -667,6 +689,55 @@ Start:
             lda #>($0400+21*40+8)
             jsr SetCursorDrawCardText
 
+            ; test hand drawings
+            ldy #<($0400+0*40+10)
+            lda #>($0400+0*40+10)
+            jsr SetCursor
+            jsr DrawPartialCardBack
+            lda #4
+            jsr AddCursor
+            jsr DrawPartialCardBack
+            lda #4
+            jsr AddCursor
+            jsr DrawPartialCardBack
+            lda #4
+            jsr AddCursor
+            jsr DrawPartialCardBack
+            lda #4
+            jsr AddCursor
+            jsr DrawPartialCardBack
+            lda #4
+            jsr AddCursor
+            jsr DrawPartialCardBack
+
+            ldy #<($0400+23*40+10)
+            lda #>($0400+23*40+10)
+            jsr SetCursor
+            lda #$32                    ; energy left
+            sta $0400+24*40
+            ldx #C_GOBLIN_LEADER
+            jsr DrawPartialCard
+            lda #4
+            jsr AddCursor
+            ldx #C_GOBLIN_LEADER+5
+            jsr DrawPartialCard
+            lda #4
+            jsr AddCursor
+            ldx #C_GOBLIN_LEADER+10
+            jsr DrawPartialCard
+            lda #4
+            jsr AddCursor
+            ldx #C_GOBLIN_LEADER+15
+            jsr DrawPartialCard
+            lda #4
+            jsr AddCursor
+            ldx #C_GOBLIN_LEADER+20
+            jsr DrawPartialCard
+            lda #4
+            jsr AddCursor
+            ldx #C_GOBLIN_LEADER+25
+            jsr DrawPartialCard
+
             ; jsr ScreenCreateDeck
 
             ; jsr DrawHealthBars
@@ -678,8 +749,8 @@ Start:
             ; jsr ClearUpperLines
             ; jsr ClearLowerLines
 
-            ldy #<($0400+15*40+28)
-            lda #>($0400+15*40+28)
+            ldy #<($0400+15*40+8+24)
+            lda #>($0400+15*40+8+24)
             jsr SetCursor
             ldy #PlayerData+PD_TABLE ; ZP offset into table (increases per SIZEOF_PD)
             ; setup card on table
@@ -692,31 +763,6 @@ Start:
             lda #2
             sta TD_DEF,y
             jsr DrawTableCard
-
-            ; ; setup card on table
-            ; lda #5 ; card# (goes per 5)
-            ; sta TD_CARD+4,x
-            ; ;sta TD_CARD+8,x
-            ; sta TD_CARD+12,x
-            ; sta TD_CARD+16,x
-            ; lda #$00 ; tapped=1,selected=$80
-            ; sta TD_STATUS+4,x
-            ; lda #2
-            ; sta TD_ATK+4,x
-            ; lda #2
-            ; sta TD_DEF+4,x
-            ; jsr DrawTable
-
-            ; ldy #<($0400+4*40+8)
-            ; lda #>($0400+4*40+8)
-            ; jsr SetCursorY0
-            ; ldx #PlayerData+PD_TABLE ; zP offset into table (increases per 4)
-            ; jsr DrawTable
-            ; ldy #0
-            ; lda #BLACK
-            ; sta CharCol
-            ; lda #102
-            ; jsr FillCard
 
             jmp *
 
@@ -1145,19 +1191,6 @@ DrawTableCard:
             ora #$30                    ; regular digits
             jmp DrawCharA
 
-; draws decorated card in X at Cursor (clobbers A,X,Y)
-; - draws legend border, full decoration and default attack/defense
-DrawCard:
-            jsr DecorateFrame
-.drawglyphframe:
-            lda Cards+CARD_GLYPH,x
-            ldx #CFG_GLYPH
-            ldy #40
-            jsr DrawWithOffset
-            lda #FRAME_CARD
-            ldx #CFG_FRAME
-            jmp Draw
-
 ; decorates top and bottom of frame according to card in X (clobbers A)
 DecorateFrame:
             ; setup type/cost
@@ -1210,6 +1243,39 @@ SetColors:
             sta SuitCol
 .stealrts1: rts
 
+; draws decorated card in X at Cursor (clobbers A,X,Y)
+; - draws legend border, full decoration and default attack/defense
+DrawCard:
+            jsr DecorateFrame
+.drawglyphframe:
+            lda Cards+CARD_GLYPH,x
+            ldx #CFG_GLYPH
+            ldy #40
+            jsr DrawWithOffset
+            lda #FRAME_CARD
+            ldx #CFG_FRAME
+            jmp Draw
+
+; draws top 2-lines of decorated card in X at Cursor (clobbers A,X,Y)
+; - draws legend border, full decoration and default attack/defense
+DrawPartialCard:
+            jsr DecorateFrame
+            ; override color if cost too high
+            lda $0400+24*40             ; energy on screen
+            ora #$B0                    ; $B0..$B9 (same as on card)
+            cmp frame_COST              ; energy-cost
+            bpl +                       ; 0+ OK
+            lda #COL_DISABLED
+            sta CharCol
+            sta SuitCol
++           lda Cards+CARD_GLYPH,x
+            ldx #CFG_GLYPH2
+            ldy #40
+            jsr DrawWithOffset
+            lda #FRAME2_CARD
+            ldx #CFG_FRAME2
+            jmp Draw
+
 ; puts cursor at Y/A Y=low byte, A=high byte, draw text of card in X (clobbers A,X,Y,Tmp1)
 SetCursorDrawCardText:
             jsr SetCursor
@@ -1233,6 +1299,14 @@ DrawCardBack:
             sta CharCol
             lda #FRAME_CARDBACK
             ldx #CFG_FRAME
+            jmp Draw
+
+; draws top 2-lines of card background at Cursor (clobbers A,X,Y)
+DrawPartialCardBack:
+            lda #GREY
+            sta CharCol
+            lda #FRAME2_CARDBACK
+            ldx #CFG_FRAME2
             jmp Draw
 
 
@@ -1370,6 +1444,7 @@ MacroData:
 FrameData:
     ; Full 5x6 card frame without top decorations
     FRAME_CARD=*-FrameData
+    FRAME2_CARD=*-FrameData
 frame_TYPE: !byte 79
 frame_COST: !byte 119
     !byte 119,119,80
@@ -1387,6 +1462,7 @@ frame_DEF: !byte $B0
     !byte 194,102,102,102,194
     !byte 194,102,102,102,194
     !byte 194,102,102,102,194
+    FRAME2_CARDBACK=*-FrameData
     !byte 194,102,102,102,194
     !byte 252,192,192,192,254
 
