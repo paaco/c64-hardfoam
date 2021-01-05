@@ -15,8 +15,6 @@
 ; TODO: player selects 1 of 4 default decks
 ; TODO: AI picks random 1 of 4 default decks with name
 ; TODO: create 2 shuffled decks
-; TODO: draw upper hand (# partialcardbacks)
-; TODO: draw lower hand (# partialcards)
 ; TODO: draw counters
 ; TODO: draw lifebars
 ; TODO: turn: take a card; if you now have 7 cards, discard one
@@ -29,8 +27,8 @@
 ; TODO: AI turn: if there are no opponent table cards left, attack player
 ; TODO: AI end turn
 
-INTRO=1
-DEBUG=0
+INTRO=0
+DEBUG=1
 !ifndef DEBUG {DEBUG=0}
 !ifndef INTRO {INTRO=0}
 !if DEBUG=1 {
@@ -40,21 +38,29 @@ DEBUG=0
 ;!source "constants.inc" ; older acme doesn't support same-dir includes
 BLACK=0
 WHITE=1
+RED=2
+CYAN=3
+PURPLE=4
 GREEN=5
 BLUE=6
 YELLOW=7
 ORANGE=8
 BROWN=9
 LIGHT_RED=10
+DARK_GREY=11
 GREY=12
+LIGHT_GREEN=13
+LIGHT_BLUE=14
+LIGHT_GREY=15
 ; colors
-COL_BORDER=BROWN
+COL_BORDER=LIGHT_BLUE
 COL_SCREEN=BLUE
 COL_HEALTH_ON=LIGHT_RED
 COL_HEALTH_OFF=BLACK
-COL_PLAIN=GREY
+COL_CARDBACK=ORANGE
+COL_PLAIN=LIGHT_GREY
 COL_LEGEND=YELLOW
-COL_DISABLED=ORANGE
+COL_DISABLED=PURPLE
 COL_SELECTED=WHITE
 COL_HIGHER=GREEN
 COL_LOWER=LIGHT_RED
@@ -70,7 +76,7 @@ CHR_SPACE=32+DEBUG*10 ; space or star
 !addr Tmp1=$0A
 !addr Tmp2=$0B
 !addr Tmp3=$0C
-!addr Tmp4=$0D
+!addr TmpText=$0D
 !addr Suit=$0E
 !addr Joystick=$0F
 ; player data (consecutive)
@@ -80,9 +86,10 @@ CHR_SPACE=32+DEBUG*10 ; space or star
     ; fixed '/' character in between
     PD_MAXENERGY=3  ; $30 .. $39
     PD_REMAIN=4     ; DECKSIZE-1 .. 0
-    PD_HAND=5       ; 7 bytes (card#), >=$80=no card
+    PD_HAND=5       ; 7 bytes (card#),$FF=no card
+    SIZEOF_HAND=7   ; max 7 cards
     PD_TABLE=12     ; 20 bytes 5*4 bytes (card#,atd,def,status)
-      TD_CARD=0     ; card# >=$80=no card
+      TD_CARD=0     ; card# $FF=no card
       TD_ATK=1      ; attack
       TD_DEF=2      ; defense
       TD_STATUS=3   ; status: 0=normal, 1=tapped, >=$80 selected
@@ -90,8 +97,8 @@ CHR_SPACE=32+DEBUG*10 ; space or star
     PD_DECK=32      ; 32 bytes (card#)
 SIZEOF_PD=64
 !addr AIData=$10+SIZEOF_PD
-;!addr Index=$90     ; loop/selection index
-;!addr MaxIndex=$91  ; <MaxIndex
+!addr Index=$90     ; loop/selection index
+!addr MaxIndex=$91  ; <MaxIndex
 ;!addr CardIdx=$92
 ;!addr TableIdx=$93
 ;!addr CardYIndex=$94; Y offset used for DrawCardSelect/ClearCardSelect
@@ -191,19 +198,19 @@ SetCursor:
 ; TEXT DRAWING
 ;----------------------------------------------------------------------------
 
-; ; puts cursor at Y/A Y=low byte, A=high byte and sets Y=0 and draws text in X (clobbers A,X,Y,Tmp1)
-; SetCursorDrawTextX:
-;             jsr SetCursorY0
-;             txa
-; draws text A at Cursor + Y (clobbers A,X,Y,Tmp1)
+; ; puts cursor at Y/A Y=low byte, A=high byte and sets Y=0 and draws text in X (clobbers A,X,Y,TmpText)
+SetCursorDrawTextX:
+            jsr SetCursor
+            txa
+; draws text A in SuitCol at Cursor + Y (clobbers A,X,Y,TmpText)
 DrawText:
             tax
-; draws text X at Cursor + Y (clobbers A,X,Y,Tmp1)
+; draws text X in SuitCol at Cursor + Y (clobbers A,X,Y,TmpText)
 DrawTextX:
 --          lda TextData,x
             beq ++                      ; text ends with 0
             ; draw macro in A
-            stx Tmp1
+            stx TmpText
             cmp #M_SUIT                 ; M_SUIT is replaced with text version
             bne +
             ldx Suit
@@ -219,7 +226,7 @@ DrawTextX:
             iny
             inx
             bne -
-            ldx Tmp1
+            ldx TmpText
             lda TextData+1,x            ; lookahead
             beq ++                      ; text ends directly with 0
             jsr DrawF_Clear             ; put space
@@ -228,7 +235,7 @@ DrawTextX:
             bne --
 ++          rts
 
-            ; DEBUG !fill 57,$EE ; remaining
+            !fill 56,$EE ; remaining
 
 ;############################################################################
 *=$01ED     ; DATA 13 bytes including return address (TRASHED WHILE LOADING)
@@ -244,43 +251,17 @@ SuitTextData:
 ;SuitLeaders:
 ;    !byte C_POLY_LEADER,C_CANDY_LEADER;,C_SOAP_LEADER,C_GOBLIN_LEADER
 
-            !fill 2,$EE ; remaining (+2 that can be overwritten)
-
 *=$01F8     ; Override return value on stack with own start address
             !word INIT-1
 
 ;############################################################################
-*=$01FA     ; DATA (01FA-0314 = 282 bytes)
-
-; ; set X and Index to Index-1 loop around (Index=0..MaxIndex-1) (clobbers X)
-; DecIndex:
-;             ldx Index
-;             bne +
-;             ldx MaxIndex
-; +           dex
-;             stx Index
-;             rts
+*=$01FA     ; DATA (01FA-028C = 147 bytes)
 
             !fill 147,$EE ; remaining
 
 ;############################################################################
 *=$028D     ; 028D-028E (2 bytes) TRASHED DURING LOADING
             !byte 0,0
-
-; ; set X and Index to Index+1 loop around (Index=0..MaxIndex-1) (clobbers X)
-; IncIndex:
-;             ldx Index
-;             inx
-;             cpx MaxIndex
-;             bne .setidx
-;             ; fall through
-
-; ; set MaxIndex to X and set X and Index to 0 (clobbers X)
-; SetMaxIndexX0:
-;             stx MaxIndex
-;             ldx #0
-; .setidx:    stx Index
-;             rts
 
             !fill 18,$EE ; remaining
 
@@ -412,7 +393,7 @@ LogoDone:
 
 .fixtwainpain:
             ldx #15
-            lda #7
+            lda #COL_LEGEND
 -           sta $d884,x
             dex
             bpl -
@@ -423,7 +404,7 @@ LogoDone:
 -           lda Alexander,x
             eor #$AA
             sta $0400+21*40+(40-28)/2,x
-            lda #YELLOW
+            lda #COL_LEGEND
             sta $D800+21*40+(40-28)/2,x
             dex
             bpl -
@@ -592,7 +573,31 @@ ShuffleDeck:
             bne .randomI                ; which always swaps the last with itself
             rts
 
-            !fill 103,$A0 ; remaining
+; set X and Index to Index-1 loop around (Index=0..MaxIndex-1) (clobbers X)
+DecIndex:
+            ldx Index
+            bne +
+            ldx MaxIndex
++           dex
+            stx Index
+            rts
+
+; set X and Index to Index+1 loop around (Index=0..MaxIndex-1) (clobbers X)
+IncIndex:
+            ldx Index
+            inx
+            cpx MaxIndex
+            bne .setidx
+            ; fall through
+
+; set MaxIndex to X and set X and Index to 0 (clobbers X)
+SetMaxIndexX0:
+            stx MaxIndex
+            ldx #0
+.setidx:    stx Index
+            rts
+
+            !fill 79,$A0 ; remaining
 
 ;############################################################################
 *=$0658     ; SCREEN (WILL BE WIPED)
@@ -691,6 +696,38 @@ logo:       !byte %01100110,%00111110,%01111110,%11111110
 *=$07E8     ; CODE
 
 Start:
+            ; TEST: put some cards in hand -> but it's probably easiest if this array is continuous
+            jsr InitPlayersData
+            lda #5
+            sta AIData+PD_HAND
+            sta AIData+PD_HAND+3
+            lda #C_CANDY_LEADER
+            sta PlayerData+PD_HAND
+            lda #C_CANDY_LEADER+5
+            sta PlayerData+PD_HAND+1
+            lda #C_CANDY_LEADER+20
+            sta PlayerData+PD_HAND+2
+            lda #$32                    ; give player some energy left
+            sta $0400+24*40
+            ; pick random AI name and plot it (TODO color, also doesn't look too efficient)
+            lda #33
+            sta ZP_RNG_LOW ; seed
+            jsr Random
+            and #$03
+            asl
+            tax
+            lda AINames,x
+            sta $0405
+            lda #'.'
+            sta $0406
+            lda AINames+1,x
+            sta $0407
+            lda #'.'
+            sta $0408
+
+            jsr DrawAIHand
+            jsr DrawPlayerHand
+
             ldy #<($0400+15*40+8)
             lda #>($0400+15*40+8)
             jsr SetCursor
@@ -700,55 +737,6 @@ Start:
             ldy #<($0400+21*40+8)
             lda #>($0400+21*40+8)
             jsr SetCursorDrawCardText
-
-            ; test hand drawings
-            ldy #<($0400+0*40+10)
-            lda #>($0400+0*40+10)
-            jsr SetCursor
-            jsr DrawPartialCardBack
-            lda #4
-            jsr AddCursor
-            jsr DrawPartialCardBack
-            lda #4
-            jsr AddCursor
-            jsr DrawPartialCardBack
-            lda #4
-            jsr AddCursor
-            jsr DrawPartialCardBack
-            lda #4
-            jsr AddCursor
-            jsr DrawPartialCardBack
-            lda #4
-            jsr AddCursor
-            jsr DrawPartialCardBack
-
-            ldy #<($0400+23*40+10)
-            lda #>($0400+23*40+10)
-            jsr SetCursor
-            lda #$32                    ; energy left
-            sta $0400+24*40
-            ldx #C_GOBLIN_LEADER
-            jsr DrawPartialCard
-            lda #4
-            jsr AddCursor
-            ldx #C_GOBLIN_LEADER+5
-            jsr DrawPartialCard
-            lda #4
-            jsr AddCursor
-            ldx #C_GOBLIN_LEADER+10
-            jsr DrawPartialCard
-            lda #4
-            jsr AddCursor
-            ldx #C_GOBLIN_LEADER+15
-            jsr DrawPartialCard
-            lda #4
-            jsr AddCursor
-            ldx #C_GOBLIN_LEADER+20
-            jsr DrawPartialCard
-            lda #4
-            jsr AddCursor
-            ldx #C_GOBLIN_LEADER+25
-            jsr DrawPartialCard
 
             ; jsr ScreenCreateDeck
 
@@ -970,6 +958,57 @@ Start:
 ;----------------------------------------------------------------------------
 ; UI DRAWING
 ;----------------------------------------------------------------------------
+
+; draw upper hand with AI card backs (clobbers A,X,Y)
+DrawAIHand:
+            lda #AIData+PD_HAND
+            sta .fixuphandptr
+            lda #<DrawPartialCardBack
+            sta .fixupdrawcard
+            ldy #<($0400+0*40+10)
+            lda #>($0400+0*40+10)
+            jmp _DrawHand
+
+; draws lower hand with visible Player cards (clobbers A,X,Y)
+DrawPlayerHand:
+            lda #PlayerData+PD_HAND
+            sta .fixuphandptr
+            lda #<DrawPartialCard
+            sta .fixupdrawcard
+            ldy #<($0400+23*40+10)
+            lda #>($0400+23*40+10)
+            jmp _DrawHand
+
+; draws hand of cards and erases remainder of row (common code) (clobbers A,X,Y)
+_DrawHand:
+            jsr SetCursor
+            ldx #SIZEOF_HAND
+            jsr SetMaxIndexX0
+            .fixuphandptr=*+1
+-           lda AIData+PD_HAND,x
+            cmp #$FF
+            beq +
+            tax
+            .fixupdrawcard=*+1
+            jsr DrawPartialCardBack
+            lda #4
+            jsr AddCursor
++           jsr IncIndex
+            bne -
+            ; fill remainder after cursor with spaces
+-           inc _CursorPos
+            lda #CHR_SPACE
+            ldy #0
+            sta (_CursorPos),y
+            ldy #40
+            sta (_CursorPos),y
+            lda _CursorPos
+            cmp #38
+            beq +
+            cmp #<(23*40+38)
+            bne -
++           rts
+
 
 ; ; draws 2 lines left of the card backs to simulate the stack (this stays the same during the game)
 ; DrawStackSides:
@@ -1307,7 +1346,7 @@ DrawCardText:
 
 ; draws card background at Cursor (clobbers A,X,Y)
 DrawCardBack:
-            lda #GREY
+            lda #COL_CARDBACK
             sta CharCol
             lda #FRAME_CARDBACK
             ldx #CFG_FRAME
@@ -1315,7 +1354,7 @@ DrawCardBack:
 
 ; draws top 2-lines of card background at Cursor (clobbers A,X,Y)
 DrawPartialCardBack:
-            lda #GREY
+            lda #COL_CARDBACK
             sta CharCol
             lda #FRAME2_CARDBACK
             ldx #CFG_FRAME2
@@ -1376,13 +1415,6 @@ Decks:
     !byte C_CANDY_LEADER,C_CANDY_LEADER+5,C_CANDY_LEADER+10,C_CANDY_LEADER+15,C_CANDY_LEADER+20,C_CANDY_LEADER+25,C_CANDY_LEADER+30,C_CANDY_LEADER+35
     !byte C_SOAP_LEADER,C_SOAP_LEADER+5,C_SOAP_LEADER+10,C_SOAP_LEADER+15,C_SOAP_LEADER+20,C_SOAP_LEADER+25,C_SOAP_LEADER+30,C_SOAP_LEADER+35
 
-; deck names (2 chars each)
-DeckNames:
-    !scr "bd"
-    !scr "jt"
-    !scr "mg"
-    !scr "rh"
-
 
 ;----------------------------------------------------------------------------
 ; GLYPHS
@@ -1433,14 +1465,6 @@ TextData:
     !byte M_SUIT,M_WANNABE,0
     E_ALL_GAIN11=*-TextData
     !byte M_ALL,M_SUIT,M_GAIN11,0
-    T_PICK_LEADER=*-TextData
-    !byte M_PICK,M_LEGENDARY,M_LEADER,0
-    T_PICK_4=*-TextData
-    !byte M_PICK,M_4,0
-    T_PICK_3=*-TextData
-    !byte M_AND,M_PICK,M_3,M_GOBLIN,0
-    T_DECK=*-TextData
-    !byte M_DECK,0
 !if *-TextData >= $FF { !error "Out of TextData memory" }
 
 ; Text macros, each ends with a byte >= $80
@@ -1457,12 +1481,7 @@ MacroData:
     M_FOAM        =*-MacroData+1 : !scr "foa",'m'+$80
     M_FOREVER     =*-MacroData+1 : !scr "foreve",'r'+$80
     M_BLOCK       =*-MacroData+1 : !scr "bloc",'k'+$80
-    M_PICK        =*-MacroData+1 : !scr "pic",'k'+$80
-    M_DECK        =*-MacroData+1 : !scr "dec",'k'+$80
-    M_AND         =*-MacroData+1 : !scr "an",'d'+$80
     M_ALL         =*-MacroData+1 : !scr "al",'l'+$80
-    M_4           =*-MacroData+1 : !scr '4'+$80
-    M_3           =*-MacroData+1 : !scr '3'+$80
     M_GAIN11      =*-MacroData+1 : !scr "gain ",78,'1',83,'1'+$80
 !if *-MacroData >= $FF { !error "Out of MacroData memory" }
 
@@ -1492,6 +1511,8 @@ frame_DEF: !byte $B0
     !byte 194,102,102,102,194
     !byte 252,192,192,192,254
 
+AINames:
+    !scr "bd","jt","mg","rh"
 
 ;----------------------------------------------------------------------------
 ; MAX 2K ALLOWED HERE
