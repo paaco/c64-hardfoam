@@ -12,7 +12,6 @@
 ; Holes at $1ED-$01F9, $028D,$028E, $02A1, $0314-$032A (vectors) and $0400-$07E8 (screen)
 ; Keeping 5 screen rows for code adds 200 bytes
 
-; TODO: create 4 default decks with 2 letter names: BD,JT,MG,RH
 ; TODO: player selects 1 of 4 default decks
 ; TODO: AI picks random 1 of 4 default decks with name
 ; TODO: create 2 shuffled decks
@@ -30,8 +29,8 @@
 ; TODO: AI turn: if there are no opponent table cards left, attack player
 ; TODO: AI end turn
 
-INTRO=0
-DEBUG=1
+INTRO=1
+DEBUG=0
 !ifndef DEBUG {DEBUG=0}
 !ifndef INTRO {INTRO=0}
 !if DEBUG=1 {
@@ -229,7 +228,7 @@ DrawTextX:
             bne --
 ++          rts
 
-            !fill 60,$EE ; remaining
+            ; DEBUG !fill 57,$EE ; remaining
 
 ;############################################################################
 *=$01ED     ; DATA 13 bytes including return address (TRASHED WHILE LOADING)
@@ -397,8 +396,48 @@ Random:
 
 ;############################################################################
 *=$0400     ; SCREEN (WILL BE WIPED)
-            ; TODO: logo occupies lower 5 lines of upper part and upper 5 lines of lower part
-            ; TODO: so put all code that runs before the logo there
+
+LogoDone:
+            ; set color of counters
+            ldx #3-1
+-           lda #COL_HEALTH_ON
+            sta $D800,x
+            sta $D800+24*40,x
+            lda #COL_PLAIN
+            sta $D800+40,x
+            sta $D800+23*40,x
+            dex
+            bpl -
+            jmp Start
+
+.fixtwainpain:
+            ldx #15
+            lda #7
+-           sta $d884,x
+            dex
+            bpl -
+            rts
+
+.putalexander:
+            ldx #28-1
+-           lda Alexander,x
+            eor #$AA
+            sta $0400+21*40+(40-28)/2,x
+            lda #YELLOW
+            sta $D800+21*40+(40-28)/2,x
+            dex
+            bpl -
+            rts
+
+Alexander:
+            !scrxor $AA, "a game by alexander paalvast" ; 28 bytes
+
+*=$0400+3*40+(40-16)/2 ; $0484 above logo so it is still alive
+            !scr "twain pain games" ; 16 bytes
+
+            ; 5 lines logo will overwrite from here
+
+*=$0400+5*40 ; 1224
 INIT:
             ; disable IRQ to avoid KERNAL messing with keyboard
             ldy #%01111111
@@ -447,27 +486,6 @@ INIT:
             jmp LogoDone
 }
 
-LogoDone:
-            ; set color of counters
-            ldx #3-1
--           lda #COL_HEALTH_ON
-            sta $D800,x
-            sta $D800+24*40,x
-            lda #COL_PLAIN
-            sta $D800+40,x
-            sta $D800+23*40,x
-            dex
-            bpl -
-            jmp Start
-
-.fixtwainpain:
-            ldx #15
-            lda #7
--           sta $d884,x
-            dex
-            bpl -
-            rts
-
 Overwrite01EDCopy:
 ;InitData:
     !scr 10, "0/0", 0
@@ -476,11 +494,6 @@ Overwrite01EDCopy:
 ;SuitLeaders:
 ;    !byte C_POLY_LEADER,C_CANDY_LEADER,C_SOAP_LEADER,C_GOBLIN_LEADER
 SIZEOF_Overwrite01EDCopy=*-Overwrite01EDCopy
-
-            ;!fill 23,$EE ; remaining WIPED DEBUG
-
-*=$0400+3*40+(40-16)/2 ; $0484 above logo so it is still alive
-            !scr "twain pain games" ; 16 bytes
 
 ; Draws rectangle 5x5 (upto 8x6) via DrawF function (clobbers A,Y)
 INITDRAW: ; 24 bytes incl configure (PIC)
@@ -504,8 +517,6 @@ INITDRAW: ; 24 bytes incl configure (PIC)
             rts
 }
 SIZEOF_DRAW=*-INITDRAW
-
-            !fill 228,$EE ; remaining WIPED
 
 ;############################################################################
 *=$0590     ; DATA (200 bytes, MIDDLE 5 SCREEN LINES ARE HIDDEN)
@@ -581,14 +592,14 @@ ShuffleDeck:
             bne .randomI                ; which always swaps the last with itself
             rts
 
-            !fill 103,$EE ; remaining
+            !fill 103,$A0 ; remaining
 
 ;############################################################################
 *=$0658     ; SCREEN (WILL BE WIPED)
 
-            !fill 200,$EE ; remaining WIPED
+            ; 5 lines logo will overwrite here
 
-*=$0658+5*40 ; in lowest 5*40=200 bytes
+*=$0658+5*40 ; in lowest 5*40=200 bytes (will not be overwritten with logo)
 Logo:
             jsr .drawlogo
             ; set ptrs to lower part ($0659)
@@ -630,6 +641,7 @@ Logo:
             jsr .fixtwainpain
 +           cmp #$E8 ; end of screen
             bne --
+            jsr .putalexander
 
             jsr DebounceJoystick
 -           jsr ReadJoystick
@@ -660,7 +672,7 @@ Logo:
             bne --
             rts
 
-            !fill 20,$EE ; remaining WIPED
+            !fill 17,$EE ; remaining WIPED
 
 *=$0400+24*40
 logo:       !byte %01100110,%00111110,%01111110,%11111110
@@ -1356,6 +1368,20 @@ Cards:
     !byte $76, $12, N_WANNABE,       T_NONE,       G_WANNABE
 SIZEOF_CARDS=*-Cards
 NUM_CARDS=SIZEOF_CARDS/5
+
+; default decks (8 bytes each, starting with legendary)
+Decks:
+    !byte C_GOBLIN_LEADER,C_GOBLIN_LEADER+5,C_GOBLIN_LEADER+10,C_GOBLIN_LEADER+15,C_GOBLIN_LEADER+20,C_GOBLIN_LEADER+25,C_GOBLIN_LEADER+30,C_GOBLIN_LEADER+35
+    !byte C_POLY_LEADER,C_POLY_LEADER+5,C_POLY_LEADER+10,C_POLY_LEADER+15,C_POLY_LEADER+20,C_POLY_LEADER+25,C_POLY_LEADER+30,C_POLY_LEADER+35
+    !byte C_CANDY_LEADER,C_CANDY_LEADER+5,C_CANDY_LEADER+10,C_CANDY_LEADER+15,C_CANDY_LEADER+20,C_CANDY_LEADER+25,C_CANDY_LEADER+30,C_CANDY_LEADER+35
+    !byte C_SOAP_LEADER,C_SOAP_LEADER+5,C_SOAP_LEADER+10,C_SOAP_LEADER+15,C_SOAP_LEADER+20,C_SOAP_LEADER+25,C_SOAP_LEADER+30,C_SOAP_LEADER+35
+
+; deck names (2 chars each)
+DeckNames:
+    !scr "bd"
+    !scr "jt"
+    !scr "mg"
+    !scr "rh"
 
 
 ;----------------------------------------------------------------------------
