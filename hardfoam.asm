@@ -28,7 +28,7 @@
 ; TODO: AI end turn
 
 INTRO=0
-DEBUG=1
+DEBUG=0
 !ifndef DEBUG {DEBUG=0}
 !ifndef INTRO {INTRO=0}
 !if DEBUG=1 {
@@ -179,7 +179,7 @@ DrawWithOffset:
             jmp _Draw+2
 
 ; adds A to cursor (clobbers A,Y)
-AddCursor:
+AddToCursor:
             clc
             adc _CursorPos
             tay
@@ -698,6 +698,9 @@ logo:       !byte %01100110,%00111110,%01111110,%11111110
 
 Start:
             ; TEST: put some cards in hand -> but it's probably easiest if this array is continuous
+            lda #33
+            sta ZP_RNG_LOW              ; seed prng with some value
+
             jsr InitPlayersData
             lda #5
             sta AIData+PD_HAND
@@ -711,9 +714,7 @@ Start:
             lda #$32                    ; give player some energy left
             sta $0400+24*40
 
-            ; pick random AI name and plot it (TODO color, also doesn't look too efficient)
-            lda #33
-            sta ZP_RNG_LOW ; seed with some value
+            ; pick random AI name and plot it
             jsr Random
             and #$03                    ; 0..3
             asl
@@ -726,28 +727,51 @@ Start:
             ; draw opponents name
             lda #COL_PLAIN
             sta SuitCol
-            ldy #<($0405)
-            lda #>($0405)
-            ldx #T_OPPONENT_NAME
+            ldy #<($0400+5*40+10)
+            lda #>($0400+5*40+10)
+            ldx #T_YOUR_OPPONENT_IS
             jsr SetCursorDrawTextX
+
+            ; pick your deck
+            ldy #<($0400+15*40+(40-14)/2)
+            lda #>($0400+15*40+(40-14)/2)
+            ldx #T_PICK_DECK ; 14
+            jsr SetCursorDrawTextX
+
+            ; pick random AI deck
             jsr Random
             and #$03                    ; 0..3 (deck#)
-            sta $0409
+            sta $0400
+
+            ; draw first card of each deck (8 bytes apart)
+            ldy #<($0400+17*40+(40-24)/2)
+            lda #>($0400+17*40+(40-24)/2)
+            jsr SetCursor
+            ldy #0
+-           sty Tmp1
+            ldx Decks,y
+            jsr DrawCard
+            lda #6
+            jsr AddToCursor
+            lda Tmp1
+            clc
+            adc #8
+            tay
+            cpy #4*8
+            bne -
 
             jsr DrawAIHand
             jsr DrawPlayerHand
 
-            ldy #<($0400+15*40+8)
-            lda #>($0400+15*40+8)
-            jsr SetCursor
-            ldx #C_GOBLIN_LEADER
-            jsr DrawCard
-            ldx #C_GOBLIN_LEADER
-            ldy #<($0400+21*40+8)
-            lda #>($0400+21*40+8)
-            jsr SetCursorDrawCardText
-
-            ; jsr ScreenCreateDeck
+            ; ldy #<($0400+15*40+8)
+            ; lda #>($0400+15*40+8)
+            ; jsr SetCursor
+            ; ldx #C_GOBLIN_LEADER
+            ; jsr DrawCard
+            ; ldx #C_GOBLIN_LEADER
+            ; ldy #<($0400+21*40+8)
+            ; lda #>($0400+21*40+8)
+            ; jsr SetCursorDrawCardText
 
             ; jsr DrawHealthBars
             ; jsr DrawCounters
@@ -832,50 +856,6 @@ Start:
 ;             cmp #%11101111              ; FIRE
 ;             beq ScreenPickCards
 ;             bne .redrawleader
-
-; ;--------------
-; ; SELECT CARDS
-; ;--------------
-; ScreenPickCards:
-;             lda CardIdx
-;             sta PlayerData+PD_DECK
-;             inc PlayerData+PD_REMAIN
-;             jsr ClearUpper
-
-;             lda #WHITE
-;             sta CharCol
-;             ldy #<($0400+18)
-;             lda #>($0400+18)
-;             ldx #T_DECK
-;             jsr SetCursorDrawTextX
-
-;             ; part 1: select 4 of leader's deck
-;             ldy #<($0400+15*40+17)
-;             lda #>($0400+15*40+17)
-;             ldx #T_PICK_4
-;             jsr SetCursorDrawTextX
-;             jsr PickCards
-
-;             ; part 2: select 3 goblins
-;             lda #WHITE
-;             sta CharCol
-;             ldy #<($0400+15*40+13)
-;             lda #>($0400+15*40+13)
-;             ldx #T_PICK_3
-;             jsr SetCursorDrawTextX
-;             lda #C_GOBLIN_LEADER
-;             jsr SetupSelectionDeck
-;             jsr DrawSelectionDeck
-;             jsr PickCards
-
-;             ; part 3: setup deck
-;             lda #33
-;             sta ZP_RNG_LOW
-;             jsr UnpackAndShuffleDeck
-
-;             ; TODO part 4: setup opponent
-
-;             jmp *
 
 ; PickCards:
 ;             ldx #6
@@ -1001,7 +981,7 @@ _DrawHand:
             .fixupdrawcard=*+1
             jsr DrawPartialCardBack
             lda #4
-            jsr AddCursor
+            jsr AddToCursor
 +           jsr IncIndex
             bne -
             ; fill remainder after cursor with spaces
@@ -1474,8 +1454,12 @@ TextData:
     !byte M_SUIT,M_WANNABE,0
     E_ALL_GAIN11=*-TextData
     !byte M_ALL,M_SUIT,M_GAIN11,0
+    T_YOUR_OPPONENT_IS=*-TextData
+    !byte M_YOUR,M_OPPONENT,M_IS
     T_OPPONENT_NAME=*-TextData
     !byte M_OPPONENT_NAME,0
+    T_PICK_DECK=*-TextData
+    !byte M_PICK,M_YOUR,M_DECK,0
 !if *-TextData >= $FF { !error "Out of TextData memory" }
 
 ; Text macros, each ends with a byte >= $80
@@ -1491,9 +1475,14 @@ MacroData:
     M_WANNABE     =*-MacroData+1 : !scr "wannab",'e'+$80
     M_FOAM        =*-MacroData+1 : !scr "foa",'m'+$80
     M_FOREVER     =*-MacroData+1 : !scr "foreve",'r'+$80
+    M_YOUR        =*-MacroData+1 : !scr "you",'r'+$80
+    M_OPPONENT    =*-MacroData+1 : !scr "opponen",'t'+$80
+    M_IS          =*-MacroData+1 : !scr "i",'s'+$80
     M_OPPONENT_NAME=*-MacroData+1
 opponent_name1:                    !scr "a."        ; SELF-MODIFIED
 opponent_name2:                    !scr "p",'.'+$80 ; SELF-MODIFIED
+    M_PICK        =*-MacroData+1 : !scr "pic",'k'+$80
+    M_DECK        =*-MacroData+1 : !scr "dec",'k'+$80
     M_BLOCK       =*-MacroData+1 : !scr "bloc",'k'+$80
     M_ALL         =*-MacroData+1 : !scr "al",'l'+$80
     M_GAIN11      =*-MacroData+1 : !scr "gain ",78,'1',83,'1'+$80
