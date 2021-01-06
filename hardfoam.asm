@@ -201,6 +201,7 @@ SetCursor:
 ; ; puts cursor at Y/A Y=low byte, A=high byte and sets Y=0 and draws text in X (clobbers A,X,Y,TmpText)
 SetCursorDrawTextX:
             jsr SetCursor
+            ldy #0
             txa
 ; draws text A in SuitCol at Cursor + Y (clobbers A,X,Y,TmpText)
 DrawText:
@@ -235,7 +236,7 @@ DrawTextX:
             bne --
 ++          rts
 
-            !fill 56,$EE ; remaining
+            !fill 54,$EE ; remaining
 
 ;############################################################################
 *=$01ED     ; DATA 13 bytes including return address (TRASHED WHILE LOADING)
@@ -709,21 +710,29 @@ Start:
             sta PlayerData+PD_HAND+2
             lda #$32                    ; give player some energy left
             sta $0400+24*40
+
             ; pick random AI name and plot it (TODO color, also doesn't look too efficient)
             lda #33
-            sta ZP_RNG_LOW ; seed
+            sta ZP_RNG_LOW ; seed with some value
             jsr Random
-            and #$03
+            and #$03                    ; 0..3
             asl
             tax
             lda AINames,x
-            sta $0405
-            lda #'.'
-            sta $0406
+            sta opponent_name1
             lda AINames+1,x
-            sta $0407
-            lda #'.'
-            sta $0408
+            sta opponent_name2
+
+            ; draw opponents name
+            lda #COL_PLAIN
+            sta SuitCol
+            ldy #<($0405)
+            lda #>($0405)
+            ldx #T_OPPONENT_NAME
+            jsr SetCursorDrawTextX
+            jsr Random
+            and #$03                    ; 0..3 (deck#)
+            sta $0409
 
             jsr DrawAIHand
             jsr DrawPlayerHand
@@ -1465,6 +1474,8 @@ TextData:
     !byte M_SUIT,M_WANNABE,0
     E_ALL_GAIN11=*-TextData
     !byte M_ALL,M_SUIT,M_GAIN11,0
+    T_OPPONENT_NAME=*-TextData
+    !byte M_OPPONENT_NAME,0
 !if *-TextData >= $FF { !error "Out of TextData memory" }
 
 ; Text macros, each ends with a byte >= $80
@@ -1480,6 +1491,9 @@ MacroData:
     M_WANNABE     =*-MacroData+1 : !scr "wannab",'e'+$80
     M_FOAM        =*-MacroData+1 : !scr "foa",'m'+$80
     M_FOREVER     =*-MacroData+1 : !scr "foreve",'r'+$80
+    M_OPPONENT_NAME=*-MacroData+1
+opponent_name1:                    !scr "a."        ; SELF-MODIFIED
+opponent_name2:                    !scr "p",'.'+$80 ; SELF-MODIFIED
     M_BLOCK       =*-MacroData+1 : !scr "bloc",'k'+$80
     M_ALL         =*-MacroData+1 : !scr "al",'l'+$80
     M_GAIN11      =*-MacroData+1 : !scr "gain ",78,'1',83,'1'+$80
