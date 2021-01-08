@@ -28,7 +28,7 @@
 ; TODO: AI end turn
 
 INTRO=0
-DEBUG=0
+DEBUG=1
 !ifndef DEBUG {DEBUG=0}
 !ifndef INTRO {INTRO=0}
 !if DEBUG=1 {
@@ -53,7 +53,7 @@ LIGHT_GREEN=13
 LIGHT_BLUE=14
 LIGHT_GREY=15
 ; colors
-COL_BORDER=LIGHT_BLUE
+COL_BORDER=BROWN
 COL_SCREEN=BLUE
 COL_HEALTH_ON=LIGHT_RED
 COL_HEALTH_OFF=BLACK
@@ -99,9 +99,9 @@ SIZEOF_PD=64
 !addr AIData=$10+SIZEOF_PD
 !addr Index=$90     ; loop/selection index
 !addr MaxIndex=$91  ; <MaxIndex
+!addr SelectorIndex=$92 ; Index used for DrawCardSelect/ClearCardSelect
 ;!addr CardIdx=$92
 ;!addr TableIdx=$93
-;!addr CardYIndex=$94; Y offset used for DrawCardSelect/ClearCardSelect
 ; Draws rectangle 5x5 (upto 8x6) via DrawF function (clobbers A,Y)
 !addr _Draw=$E0     ; $E0-$F8 is block drawing routine
 
@@ -112,19 +112,19 @@ SIZEOF_PD=64
 ; CHARACTER DRAWING FUNCTIONS FOR DRAW
 ;----------------------------------------------------------------------------
 
-; Draw card frame in CharCol at Cursor, skipping $60
+; draws card frame in CharCol at Cursor + Y, skipping $60 (clobbers A,X)
 DrawF_Frame:
             lda FrameData,x
             inx
             cmp #$60                    ; $60/96 (SHIFT-SPACE) skips
             beq +
-DrawCharA:
+DrawF_ACharCol: ; (clobbers A)
             sta (_CursorPos),y
             lda CharCol
             sta (_ColorPos),y
 +           rts
 
-; Draw glyph in SuitCol at Cursor + 1
+; draws glyph in SuitCol at Cursor + Y + 1 (clobbers A,X)
 DrawF_Glyph:
             iny
             lda GlyphData,x
@@ -135,9 +135,14 @@ DrawF_Glyph:
             dey
             rts
 
-DrawF_Clear:
+; draws space in SuitCol at Cursor + Y (clobbers A)
+DrawF_ClearSuitCol:
             lda #CHR_SPACE
-            bne DrawCharA               ; always
+DrawF_ASuitCol: ; (clobbers A)
+            sta (_CursorPos),y
+            lda SuitCol
+            sta (_ColorPos),y
+            rts
 
 !if (>DrawF_Frame != >DrawF_Frame) { !error "All DrawF functions must be in same page" }
 
@@ -158,16 +163,16 @@ _Configure:
             rts
 
 ConfigData:
-    CFG_FRAME=*-ConfigData
-    !byte <DrawF_Frame,5,6*40   ; 5x6 card
-    CFG_CLEARFRAME=*-ConfigData
-    !byte <DrawF_Clear,5,6*40   ; 5x6 clear
-    CFG_GLYPH=*-ConfigData
-    !byte <DrawF_Glyph,3,4*40   ; 3x3 glyph drawn at offset +41
-    CFG_FRAME2=*-ConfigData
-    !byte <DrawF_Frame,5,2*40   ; 5x2 card
-    CFG_GLYPH2=*-ConfigData
-    !byte <DrawF_Glyph,3,2*40   ; 3x1 glyph drawn at offset +41
+    CFG_FRAME=*-ConfigData              ; 5x6 card
+    !byte <DrawF_Frame,5,6*40
+    CFG_CLEARFRAME=*-ConfigData         ; 5x6 clear
+    !byte <DrawF_ClearSuitCol,5,6*40
+    CFG_GLYPH=*-ConfigData              ; 3x3 glyph drawn at offset +41
+    !byte <DrawF_Glyph,3,4*40
+    CFG_FRAME2=*-ConfigData             ; 5x2 card
+    !byte <DrawF_Frame,5,2*40
+    CFG_GLYPH2=*-ConfigData             ; 3x1 glyph drawn at offset +41 (for 5x2 card)
+    !byte <DrawF_Glyph,3,2*40
 
 ; configures Draw function with X=config and Draws with A=srcoffset, Y=0(dstoffset) (clobbers A,X,Y)
 Draw:
@@ -221,22 +226,20 @@ DrawTextX:
             bpl +
             and #$7F                    ; last character
             ldx #$FF                    ; ends loop
-+           sta (_CursorPos),y
-            lda SuitCol
-            sta (_ColorPos),y
++           jsr DrawF_ASuitCol
             iny
             inx
             bne -
             ldx TmpText
             lda TextData+1,x            ; lookahead
             beq ++                      ; text ends directly with 0
-            jsr DrawF_Clear             ; put space
+            jsr DrawF_ClearSuitCol      ; put space
             iny
             inx
             bne --
 ++          rts
 
-            !fill 54,$EE ; remaining
+            !fill 47,$EE ; remaining
 
 ;############################################################################
 *=$01ED     ; DATA 13 bytes including return address (TRASHED WHILE LOADING)
@@ -264,7 +267,10 @@ SuitTextData:
 *=$028D     ; 028D-028E (2 bytes) TRASHED DURING LOADING
             !byte 0,0
 
-            !fill 18,$EE ; remaining
+CardSelectorOffsets: ; max 6 cards can be selected (index 5)
+    !for i,0,5 { !byte 2*40-1 + i*6 }
+
+            !fill 12,$EE ; remaining
 
 ;############################################################################
 *=$02A1     ; RS232 Enables SHOULD STAY 0 DURING LOADING!
@@ -727,21 +733,29 @@ Start:
             ; draw opponents name
             lda #COL_PLAIN
             sta SuitCol
-            ldy #<($0400+5*40+10)
-            lda #>($0400+5*40+10)
-            ldx #T_YOUR_OPPONENT_IS
-            jsr SetCursorDrawTextX
-
-            ; pick your deck
-            ldy #<($0400+15*40+(40-14)/2)
-            lda #>($0400+15*40+(40-14)/2)
-            ldx #T_PICK_DECK ; 14
+            ldy #<($0400+5*40+9)
+            lda #>($0400+5*40+9)
+            ldx #T_YOUR_OPPONENT_IS ; 21
             jsr SetCursorDrawTextX
 
             ; pick random AI deck
             jsr Random
             and #$03                    ; 0..3 (deck#)
             sta $0400
+
+            ; pick your deck
+            ldy #<($0400+15*40+(40-17)/2)
+            lda #>($0400+15*40+(40-17)/2)
+            ldx #T_PICK_DECK ; 17
+            jsr SetCursorDrawTextX
+            ; invert at cursor
+            ldy #17
+-           dey
+            lda (_CursorPos),y
+            eor #$80
+            sta (_CursorPos),y
+            cpy #$00
+            bne -
 
             ; draw first card of each deck (8 bytes apart)
             ldy #<($0400+17*40+(40-24)/2)
@@ -760,8 +774,20 @@ Start:
             cpy #4*8
             bne -
 
+            ldy #<($0400+17*40+(40-24)/2)
+            lda #>($0400+17*40+(40-24)/2)
+            jsr SetCursor
+            ldx #4
+            jsr SetMaxIndexX0
+-           jsr DrawSelector
+            jsr ClearSelector
+            jsr IncIndex
+            bne -
+
             jsr DrawAIHand
             jsr DrawPlayerHand
+
+            jmp *
 
             ; ldy #<($0400+15*40+8)
             ; lda #>($0400+15*40+8)
@@ -804,130 +830,6 @@ Start:
 ; GAME SCREENS
 ;----------------------------------------------------------------------------
 
-; ;-------------
-; ; CREATE DECK
-; ;-------------
-; ; draws 4 leaders and their cards and lets the user pick a leader
-; ScreenCreateDeck:
-;             jsr InitPlayersData
-;             jsr ClearAll
-;             lda #WHITE
-;             sta CharCol
-;             ldy #<($0400+0*40+9)
-;             lda #>($0400+0*40+9)
-;             ldx #T_PICK_LEADER
-;             jsr SetCursorDrawTextX
-
-;             ; Draw decorated leaders in upper part
-;             ldy #<($0400+2*40+8)
-;             lda #>($0400+2*40+8)
-;             jsr SetCursorY0
-;             ldx #4
-;             jsr SetMaxIndexX0
-; -           lda SuitLeaders,x
-;             jsr DrawCardAOrCardBack
-;             jsr IncIndex
-;             bne -
-
-; .redrawleader:
-;             ; show selected card name and effect
-;             ldy #<($0400+8*40+8)
-;             lda #>($0400+8*40+8)
-;             jsr SetCursorY0
-;             ldx Index
-;             lda SuitLeaders,x
-;             sta CardIdx
-;             jsr DrawCardText
-
-;             ; fill array with cards belonging to leader
-;             lda CardIdx                 ; start with leader
-;             pha                         ; backup
-;             jsr SetupSelectionDeck
-;             jsr DrawSelectionDeck
-;             pla
-;             sta CardIdx                 ; restore
-
-;             ldy #<($0400+2*40+8)
-;             lda #>($0400+2*40+8)
-;             jsr SetCursorY0
-
-;             jsr SelectCard
-;             lda Joystick
-;             cmp #%11101111              ; FIRE
-;             beq ScreenPickCards
-;             bne .redrawleader
-
-; PickCards:
-;             ldx #6
-;             jsr SetMaxIndexX0
-; .redrawcards:
-;             jsr DrawPickedDeck
-;             lda $0400+15*40+17+6        ; cards to pick digit on screen
-;             cmp #'0'
-;             beq .stealrts3
-;             ldy #<($0400+17*40+2)
-;             lda #>($0400+17*40+2)
-;             jsr SetCursorY0
-;             ; TODO draw card text ($FF is no text)
-;             jsr SelectCard
-;             lda Joystick
-; +           cmp #%11101111              ; FIRE
-;             bne .redrawcards
-;             ; add card to deck
-;             ldx Index
-;             lda TmpPlayerSelectData,x   ; card#
-;             cmp #$FF
-;             beq .redrawcards            ; already put
-;             ldy PlayerData+PD_REMAIN
-;             sta PlayerData+PD_DECK,y
-;             inc PlayerData+PD_REMAIN
-;             lda #$FF                    ; remove
-;             sta TmpPlayerSelectData,x
-;             dec $0400+15*40+17+6        ; decrease cards to pick digit on screen
-;             jsr DrawSelectionDeck
-;             beq .redrawcards            ; always
-
-; ; create array with selection deck for leader in A (marks all cards as visible)
-; SetupSelectionDeck:
-;             ldx #6-1
-; -           clc
-;             adc #SIZEOF_CARD            ; next card#
-;             sta TmpPlayerSelectData,x
-;             dex
-;             bpl -
-;             rts
-
-; ; draw selection deck card in lower part; if card=$FF then card back is drawn
-; DrawSelectionDeck:
-;             ldy #<($0400+17*40+2)
-;             lda #>($0400+17*40+2)
-;             jsr SetCursorY0
-;             sty Tmp4
-; -           ldx Tmp4
-;             lda TmpPlayerSelectData,x
-;             jsr DrawCardAOrCardBack
-;             inc Tmp4
-;             lda Tmp4
-;             cmp #6
-;             bne -
-; .stealrts3: rts
-
-; ; draw currently picked deck in upper part
-; DrawPickedDeck:
-;             ldy #<($0400+2*40-1)
-;             lda #>($0400+2*40-1)
-;             jsr SetCursorY0
-;             sty Tmp4
-; -           ldx Tmp4
-;             lda PlayerData+PD_DECK,x
-;             jsr DrawCardAOrEmpty
-;             dey                         ; remove space between cards
-;             inc Tmp4
-;             lda Tmp4
-;             cmp #8
-;             bne -
-;             rts
-
 ; ; select a card from a visible list; debounces and handles left/right
 ; ; - assumes cursor is positioned top-left of first card
 ; SelectCard:
@@ -966,7 +868,7 @@ DrawPlayerHand:
             sta .fixupdrawcard
             ldy #<($0400+23*40+10)
             lda #>($0400+23*40+10)
-            jmp _DrawHand
+            ; fall through
 
 ; draws hand of cards and erases remainder of row (common code) (clobbers A,X,Y)
 _DrawHand:
@@ -992,9 +894,9 @@ _DrawHand:
             ldy #40
             sta (_CursorPos),y
             lda _CursorPos
-            cmp #38
+            cmp #38                     ; end for AI hand
             beq +
-            cmp #<(23*40+38)
+            cmp #<(23*40+38)            ; end for Player hand
             bne -
 +           rts
 
@@ -1154,25 +1056,30 @@ _DrawHand:
 ;             bne -
 ;             rts
 
-; ; draws card selection symbols around a card at cursor + Index*6 (clobbers A,X,Y,Tmp1,CardYIndex)
-; ; - cursor is assumed to be top-left of card deck
-; DrawCardSelectIndex:
-;             ldx Index
-;             lda CardSelectionYOffsets,x
-;             sta CardYIndex
-;             tay
-;             lda #COL_SELECTED
-;             sta CharCol
-;             ldx #B_SELECTOR
-; .drawselector:
-;             jmp DrawBlock
+; draws selection symbols around a card at Cursor + Index*6 (clobbers A,X,Y)
+; - cursor is assumed to be top-left of card deck
+DrawSelector:
+            lda #COL_SELECTED
+            sta CharCol
+            ldx Index
+            stx SelectorIndex
+            lda #'>'
+            jsr .drawselector
+            inx
+            lda #'<'
+.drawselector:
+            ldy CardSelectorOffsets,x
+            jmp DrawF_ACharCol
 
-; ; clears card selection symbols around a card at cursor + CardYIndex (clobbers A,X,Y,Tmp1)
-; ; - cursor is assumed to be top-left of card deck
-; ClearCardSelectIndex:
-;             ldy CardYIndex
-;             ldx #B_CLEARSELECTOR
-;             bne .drawselector           ; always
+; clears card selection symbols around a card at Cursor + SelectorIndex*6 (clobbers A,X,Y)
+; - cursor is assumed to be top-left of card deck
+ClearSelector:
+            ldx SelectorIndex
+            jsr .drawselectorspace
+            inx
+.drawselectorspace:
+            lda #CHR_SPACE
+            jmp .drawselector
 
 
 ;----------------------------------------------------------------------------
@@ -1229,7 +1136,7 @@ DrawTableCard:
 +           sta CharCol                 ; SELF-MODIFIED $85=STA $24=BIT
             lda TD_ATK,x
             ora #$30                    ; regular digits
-            jmp DrawCharA
+            jmp DrawF_ACharCol
 
 ; decorates top and bottom of frame according to card in X (clobbers A)
 DecorateFrame:
@@ -1296,6 +1203,22 @@ DrawCard:
             ldx #CFG_FRAME
             jmp Draw
 
+; draws card background at Cursor (clobbers A,X,Y)
+DrawCardBack:
+            lda #COL_CARDBACK
+            sta CharCol
+            lda #FRAME_CARDBACK
+            ldx #CFG_FRAME
+            jmp Draw
+
+; draws top 2-lines of card background at Cursor (clobbers A,X,Y)
+DrawPartialCardBack:
+            lda #COL_CARDBACK
+            sta CharCol
+            lda #FRAME2_CARDBACK
+            ldx #CFG_FRAME2
+            jmp Draw
+
 ; draws top 2-lines of decorated card in X at Cursor (clobbers A,X,Y)
 ; - draws legend border, full decoration and default attack/defense
 DrawPartialCard:
@@ -1315,6 +1238,7 @@ DrawPartialCard:
             lda #FRAME2_CARD
             ldx #CFG_FRAME2
             jmp Draw
+!if (>DrawPartialCardBack != >DrawPartialCard) { !error "DrawPartialCard and DrawPartialCardBack must be in same page" }
 
 ; puts cursor at Y/A Y=low byte, A=high byte, draw text of card in X (clobbers A,X,Y,Tmp1)
 SetCursorDrawCardText:
@@ -1332,22 +1256,6 @@ DrawCardText:
             ldy #40
             lda Cards+CARD_EFFECT,x
             jmp DrawText
-
-; draws card background at Cursor (clobbers A,X,Y)
-DrawCardBack:
-            lda #COL_CARDBACK
-            sta CharCol
-            lda #FRAME_CARDBACK
-            ldx #CFG_FRAME
-            jmp Draw
-
-; draws top 2-lines of card background at Cursor (clobbers A,X,Y)
-DrawPartialCardBack:
-            lda #COL_CARDBACK
-            sta CharCol
-            lda #FRAME2_CARDBACK
-            ldx #CFG_FRAME2
-            jmp Draw
 
 
 ;----------------------------------------------------------------------------
@@ -1459,7 +1367,7 @@ TextData:
     T_OPPONENT_NAME=*-TextData
     !byte M_OPPONENT_NAME,0
     T_PICK_DECK=*-TextData
-    !byte M_PICK,M_YOUR,M_DECK,0
+    !byte M_2SPACES,M_PICK,M_A,M_DECK,M_2SPACES,0
 !if *-TextData >= $FF { !error "Out of TextData memory" }
 
 ; Text macros, each ends with a byte >= $80
@@ -1481,7 +1389,9 @@ MacroData:
     M_OPPONENT_NAME=*-MacroData+1
 opponent_name1:                    !scr "a."        ; SELF-MODIFIED
 opponent_name2:                    !scr "p",'.'+$80 ; SELF-MODIFIED
+    M_2SPACES     =*-MacroData+1 : !scr " ",' '+$80
     M_PICK        =*-MacroData+1 : !scr "pic",'k'+$80
+    M_A           =*-MacroData+1 : !scr 'a'+$80
     M_DECK        =*-MacroData+1 : !scr "dec",'k'+$80
     M_BLOCK       =*-MacroData+1 : !scr "bloc",'k'+$80
     M_ALL         =*-MacroData+1 : !scr "al",'l'+$80
@@ -1490,9 +1400,8 @@ opponent_name2:                    !scr "p",'.'+$80 ; SELF-MODIFIED
 
 ; DrawF_Frame source data, use $60/96 to skip over a char
 FrameData:
-    ; Full 5x6 card frame without top decorations
-    FRAME_CARD=*-FrameData
-    FRAME2_CARD=*-FrameData
+    FRAME_CARD=*-FrameData              ; Full 5x6 card frame without top decorations
+    FRAME2_CARD=*-FrameData             ; 5x2 top of card frame without top decorations
 frame_TYPE: !byte 79
 frame_COST: !byte 119
     !byte 119,119,80
@@ -1505,12 +1414,12 @@ frame_ATK: !byte $B0
     !byte 160,211
 frame_DEF: !byte $B0
     ; Full 5x6 card back
-    FRAME_CARDBACK=*-FrameData
+    FRAME_CARDBACK=*-FrameData          ; Full 5x6 card back
     !byte 236,192,192,192,251
     !byte 194,102,102,102,194
     !byte 194,102,102,102,194
     !byte 194,102,102,102,194
-    FRAME2_CARDBACK=*-FrameData
+    FRAME2_CARDBACK=*-FrameData         ; 5x2 bottom of card back
     !byte 194,102,102,102,194
     !byte 252,192,192,192,254
 
