@@ -12,9 +12,6 @@
 ; Holes at $1ED-$01F9, $028D,$028E, $02A1, $0314-$032A (vectors) and $0400-$07E8 (screen)
 ; Keeping 5 screen rows for code adds 200 bytes
 
-; TODO: player selects 1 of 4 default decks
-; TODO: AI picks random 1 of 4 default decks with name
-; TODO: create 2 shuffled decks
 ; TODO: draw counters
 ; TODO: draw lifebars
 ; TODO: turn: take a card; if you now have 7 cards, discard one
@@ -70,6 +67,7 @@ CHR_SPACE=32+DEBUG*10 ; space or star
 !addr _CursorPos=$02 ; ptr
 !addr _ColorPos=$04 ; ptr
 !addr CharCol=$06
+!addr Suit=$07                          ; Suit and SuitCol are the same
 !addr SuitCol=$07
 !addr ZP_RNG_LOW = $08
 !addr ZP_RNG_HIGH = $09
@@ -77,7 +75,7 @@ CHR_SPACE=32+DEBUG*10 ; space or star
 !addr Tmp2=$0B
 !addr Tmp3=$0C
 !addr TmpText=$0D
-!addr Suit=$0E
+;!addr Suit=$0E
 !addr Joystick=$0F
 ; player data (consecutive)
 !addr PlayerData=$10
@@ -267,10 +265,7 @@ SuitTextData:
 *=$028D     ; 028D-028E (2 bytes) TRASHED DURING LOADING
             !byte 0,0
 
-CardSelectorOffsets: ; max 6 cards can be selected (index 5)
-    !for i,0,5 { !byte 2*40-1 + i*6 }
-
-            !fill 12,$EE ; remaining
+            !fill 18,$EE ; remaining
 
 ;############################################################################
 *=$02A1     ; RS232 Enables SHOULD STAY 0 DURING LOADING!
@@ -476,7 +471,7 @@ INIT:
 
 Overwrite01EDCopy:
 ;InitData:
-    !scr 10, "0/0", 0
+    !scr 10, "0/0", 28
 ;SuitTextData:
     !byte M_GOBLIN,M_POLYSTYRENE,M_CANDY,M_SOAP
 ;SuitLeaders:
@@ -528,8 +523,23 @@ InitPlayersData:
             bpl -
             rts
 
-; expands and shuffles PlayerData deck from 8 bytes to 28 cards
-UnpackAndShuffleDeck:
+; copy deck# in A into PlayerData deck, unpacks and shuffles (clobbers A,X,Y)
+CreatePlayerDeck:
+            asl
+            asl
+            asl                         ; 0,8,16,24
+            tax
+            ldy #0
+-           lda Decks,x
+            sta PlayerData+PD_DECK,y
+            inx
+            iny
+            cpy #8
+            bne -
+            ; fall through
+
+; expands and shuffles PlayerData deck from 8 bytes to 28 cards (clobbers A,X,Y)
+UnpackAndShufflePlayerDeck:
             lda PlayerData+PD_DECK      ; leader
             pha                         ; backup
             ldx #7
@@ -544,8 +554,8 @@ UnpackAndShuffleDeck:
             dex
             bne -
             ; put leader in random place
-.random027: jsr Random ; 0-255
-            and #$1f   ; 0-31
+.random027: jsr Random                  ; 0-255
+            ;and #$1f                    ; 0-31
             cmp #(28-1)+1
             bcs .random027
             tax
@@ -553,11 +563,11 @@ UnpackAndShuffleDeck:
             sta PlayerData+PD_DECK,x
             ; fall through
 
-; Knuth Fisher-Yates shuffle
+; Knuth Fisher-Yates shuffle Player deck (clobbers A,X,Y,Tmp1,Tmp2)
 ;    for i in range(0, n-1) inclusive:
 ;       j = i + random(0, n-1 - i) inclusive
 ;       swap L[i], L[j]
-ShuffleDeck:
+ShufflePlayerDeck:
             ldx #0                      ; i
             lda #(28-1)+1               ; deck size
             sta Tmp1                    ; "n-1"
@@ -604,7 +614,48 @@ SetMaxIndexX0:
 .setidx:    stx Index
             rts
 
-            !fill 79,$A0 ; remaining
+; select a card from a visible list; debounces and handles left/right
+; - assumes cursor is positioned top-left of first card
+SelectCard:
+            jsr DrawSelector
+            jsr DebounceJoystick
+-           jsr ReadJoystick            ; 111FRLDU
+            beq -
+            cmp #%11110111              ; RIGHT
+            bne +
+            jsr IncIndex
++           cmp #%11111011              ; LEFT
+            bne +
+            jsr DecIndex
++           ; fall through
+
+; clears card selection symbols around a card at Cursor + SelectorIndex*6 (clobbers A,X,Y)
+; - cursor is assumed to be top-left of card deck
+ClearSelector:
+            ldx SelectorIndex
+            jsr .drawselectorspace
+            inx
+.drawselectorspace:
+            lda #CHR_SPACE
+            bne .drawselector           ; always
+
+; draws selection symbols around a card at Cursor + Index*6 (clobbers A,X,Y)
+; - cursor is assumed to be top-left of card deck
+DrawSelector:
+            lda #COL_SELECTED
+            sta CharCol
+            ldx Index
+            stx SelectorIndex
+            lda #'>'
+            jsr .drawselector
+            inx
+            lda #'<'
+.drawselector:
+            ldy CardSelectorOffsets,x
+            jmp DrawF_ACharCol
+
+CardSelectorOffsets: ; max 6 cards can be selected (index 5)
+    !for i,0,5 { !byte 2*40-1 + i*6 }
 
 ;############################################################################
 *=$0658     ; SCREEN (WILL BE WIPED)
@@ -707,6 +758,7 @@ Start:
             lda #33
             sta ZP_RNG_LOW              ; seed prng with some value
 
+            jsr ClearAll
             jsr InitPlayersData
             lda #5
             sta AIData+PD_HAND
@@ -720,9 +772,9 @@ Start:
             lda #$32                    ; give player some energy left
             sta $0400+24*40
 
-            ; pick random AI name and plot it
+            ; setup random AI name
             jsr Random
-            and #$03                    ; 0..3
+            and #$03                    ; 0..3 (name#)
             asl
             tax
             lda AINames,x
@@ -741,11 +793,18 @@ Start:
             ; pick random AI deck
             jsr Random
             and #$03                    ; 0..3 (deck#)
-            sta $0400
+            sta $0400                   ; DEBUG
+            jsr CreatePlayerDeck
+            ; copy to AI deck
+            ldx #28-1
+-           lda PlayerData+PD_DECK,x
+            sta AIData+PD_DECK,x
+            dex
+            bpl -
 
             ; pick your deck
-            ldy #<($0400+15*40+(40-17)/2)
-            lda #>($0400+15*40+(40-17)/2)
+            ldy #<($0400+9*40+(40-17)/2)
+            lda #>($0400+9*40+(40-17)/2)
             ldx #T_PICK_DECK ; 17
             jsr SetCursorDrawTextX
             ; invert at cursor
@@ -758,8 +817,8 @@ Start:
             bne -
 
             ; draw first card of each deck (8 bytes apart)
-            ldy #<($0400+17*40+(40-24)/2)
-            lda #>($0400+17*40+(40-24)/2)
+            ldy #<($0400+15*40+(40-24)/2)
+            lda #>($0400+15*40+(40-24)/2)
             jsr SetCursor
             ldy #0
 -           sty Tmp1
@@ -774,15 +833,27 @@ Start:
             cpy #4*8
             bne -
 
-            ldy #<($0400+17*40+(40-24)/2)
-            lda #>($0400+17*40+(40-24)/2)
-            jsr SetCursor
             ldx #4
             jsr SetMaxIndexX0
--           jsr DrawSelector
-            jsr ClearSelector
-            jsr IncIndex
+-           lda Index
+            sta Suit
+            jsr ClearLowerLines
+            ldy #<($0400+21*40+(40-24)/2)
+            lda #>($0400+21*40+(40-24)/2)
+            ldx #T_SUIT_DECK
+            jsr SetCursorDrawTextX
+
+            ldy #<($0400+15*40+(40-24)/2)
+            lda #>($0400+15*40+(40-24)/2)
+            jsr SetCursor
+            jsr SelectCard
+            lda Joystick
+            cmp #%11101111              ; FIRE
             bne -
+
+            ; copy selected deck into player deck
+            lda Index                   ; 0,1,2,3
+            jsr CreatePlayerDeck
 
             jsr DrawAIHand
             jsr DrawPlayerHand
@@ -830,20 +901,6 @@ Start:
 ; GAME SCREENS
 ;----------------------------------------------------------------------------
 
-; ; select a card from a visible list; debounces and handles left/right
-; ; - assumes cursor is positioned top-left of first card
-; SelectCard:
-;             jsr DrawCardSelectIndex
-;             jsr DebounceJoystick
-; -           jsr ReadJoystick            ; 111FRLDU
-;             beq -
-;             cmp #%11110111              ; RIGHT
-;             bne +
-;             jsr IncIndex
-; +           cmp #%11111011              ; LEFT
-;             bne +
-;             jsr DecIndex
-; +           jmp ClearCardSelectIndex
 
 
 ;----------------------------------------------------------------------------
@@ -858,7 +915,7 @@ DrawAIHand:
             sta .fixupdrawcard
             ldy #<($0400+0*40+10)
             lda #>($0400+0*40+10)
-            jmp _DrawHand
+            bne .drawhand               ; always
 
 ; draws lower hand with visible Player cards (clobbers A,X,Y)
 DrawPlayerHand:
@@ -868,10 +925,7 @@ DrawPlayerHand:
             sta .fixupdrawcard
             ldy #<($0400+23*40+10)
             lda #>($0400+23*40+10)
-            ; fall through
-
-; draws hand of cards and erases remainder of row (common code) (clobbers A,X,Y)
-_DrawHand:
+.drawhand:
             jsr SetCursor
             ldx #SIZEOF_HAND
             jsr SetMaxIndexX0
@@ -900,7 +954,6 @@ _DrawHand:
             bne -
 +           rts
 
-
 ; ; draws 2 lines left of the card backs to simulate the stack (this stays the same during the game)
 ; DrawStackSides:
 ;             ldy #<($0400+3*40)
@@ -926,37 +979,25 @@ _DrawHand:
 ;             bne -
 ;             rts
 
-; ; clears the two lower lines - starts the upper with 4 line chars (clobbers A,X,Y)
-; ClearLowerLines:
-;             ldy #<($0400+21*40)
-;             lda #>($0400+21*40)
-;             jsr SetCursorY0
-;             jsr .lines
-;             ldx #0
-;             jmp .spaces
+; clears the two lower lines (clobbers A,Y)
+ClearLowerLines: ; 14 bytes
+            lda #CHR_SPACE
+            ldy #38
+-           sta $0400+21*40,y
+            sta $0400+22*40,y
+            dey
+            bpl -
+            rts
 
-; ; clears two lines upper lines - starts the lower with 4 line chars (clobbers A,X,Y)
-; ClearUpperLines:
-;             ldy #<($0400+2*40)
-;             lda #>($0400+2*40)
-;             jsr SetCursorY0
-;             ldx #0
-;             jsr .spaces
-;             ; fall through
-; .lines:     ldx #0
-; -           lda #67 ; line
-;             jsr MovePutChar
-;             inx
-;             cpx #4
-;             bne -
-; .spaces:    lda #CHR_SPACE
-;             jsr MovePutChar
-;             inx
-;             cpx #38
-;             bne .spaces
-;             iny
-;             iny
-;             rts
+; clears two lines upper lines - starts the lower with 4 line chars (clobbers A,X,Y)
+ClearUpperLines: ; 14 bytes
+            lda #CHR_SPACE
+            ldy #38
+-           sta $0400+2*40,y
+            sta $0400+3*40,y
+            dey
+            bpl -
+            rts
 
 ; ; draws both health bars (clobbers A,X,Y,Tmp1,cursor)
 ; DrawHealthBars:
@@ -1018,68 +1059,43 @@ _DrawHand:
 ;             rts
 
 ; ; Converts .A to 3 ASCII/PETSCII digits: .Y = hundreds, .X = tens, .A = ones
-; AtoASCII2:
-;             ; ldy #$2f
-;             ldx #$3a
-;             sec
-; -           ; iny
-;             sbc #100
-;             ; bcs -
-; -           dex
-;             adc #10
-;             bmi -
-;             adc #$2f
-;             ; <10 "9 "
-;             cpx #$30
-;             bne +
-;             tax
-;             lda #CHR_SPACE
-; +           rts
-
-; ; wipes the top and bottom of the screen completely (clobbers A,X)
-; ClearAll:
-;             ldx #5*40
-;             lda #CHR_SPACE
-; -           sta $0400-1+15*40,x
-;             sta $0400-1+20*40,x
-;             dex
-;             bne -
-;             ; fall through
-
-; ; wipes the top of the screen completely (clobbers A,X)
-; ClearUpper:
-;             ldx #5*40
-;             lda #CHR_SPACE
-; -           sta $0400-1,x
-;             sta $0400-1+5*40,x
-;             dex
-;             bne -
-;             rts
-
-; draws selection symbols around a card at Cursor + Index*6 (clobbers A,X,Y)
-; - cursor is assumed to be top-left of card deck
-DrawSelector:
-            lda #COL_SELECTED
-            sta CharCol
-            ldx Index
-            stx SelectorIndex
-            lda #'>'
-            jsr .drawselector
-            inx
-            lda #'<'
-.drawselector:
-            ldy CardSelectorOffsets,x
-            jmp DrawF_ACharCol
-
-; clears card selection symbols around a card at Cursor + SelectorIndex*6 (clobbers A,X,Y)
-; - cursor is assumed to be top-left of card deck
-ClearSelector:
-            ldx SelectorIndex
-            jsr .drawselectorspace
-            inx
-.drawselectorspace:
+AtoASCII2: ; 20 bytes
+            ; ldy #$2f
+            ldx #$3a
+            sec
+-           ; iny
+            sbc #100
+            ; bcs -
+-           dex
+            adc #10
+            bmi -
+            adc #$2f
+            ; <10 "9 "
+            cpx #$30
+            bne +
+            tax
             lda #CHR_SPACE
-            jmp .drawselector
++           rts
+
+; wipes the top and bottom of the screen completely (clobbers A,X)
+ClearAll: ; 27 bytes
+            ldx #5*40
+            lda #CHR_SPACE
+-           sta $0400-1+15*40,x
+            sta $0400-1+20*40,x
+            dex
+            bne -
+            ; fall through
+
+; wipes the top of the screen completely (clobbers A,X)
+ClearUpper: ; 14 bytes
+            ldx #5*40
+            lda #CHR_SPACE
+-           sta $0400-1,x
+            sta $0400-1+5*40,x
+            dex
+            bne -
+            rts
 
 
 ;----------------------------------------------------------------------------
@@ -1203,6 +1219,9 @@ DrawCard:
             ldx #CFG_FRAME
             jmp Draw
 
+; puts cursor at Y/A Y=low byte, A=high byte, card background (clobbers A,X,Y)
+SetCursorDrawCardBack:
+            jsr SetCursor
 ; draws card background at Cursor (clobbers A,X,Y)
 DrawCardBack:
             lda #COL_CARDBACK
@@ -1368,6 +1387,8 @@ TextData:
     !byte M_OPPONENT_NAME,0
     T_PICK_DECK=*-TextData
     !byte M_2SPACES,M_PICK,M_A,M_DECK,M_2SPACES,0
+    T_SUIT_DECK=*-TextData
+    !byte M_SUIT,M_DECK,0
 !if *-TextData >= $FF { !error "Out of TextData memory" }
 
 ; Text macros, each ends with a byte >= $80
