@@ -12,8 +12,6 @@
 ; Holes at $1ED-$01F9, $028D,$028E, $02A1, $0314-$032A (vectors) and $0400-$07E8 (screen)
 ; Keeping 5 screen rows for code adds 200 bytes
 
-; TODO: draw counters
-; TODO: draw lifebars
 ; TODO: turn: take a card; if you now have 7 cards, discard one
 ; TODO: turn: play cards from your hand
 ; TODO: turn: attack with table cards (pick your own order, attack not required)
@@ -148,7 +146,7 @@ DrawF_ASuitCol: ; (clobbers A)
 ; CHARACTER DRAWING
 ;----------------------------------------------------------------------------
 
-; configures Draw function with X=config
+; configures Draw function with X=config (clobbers none)
 _Configure:
             pha
             lda ConfigData,x
@@ -379,6 +377,7 @@ Random:
 
 ;############################################################################
 *=$0400     ; SCREEN (WILL BE WIPED)
+            jmp INIT
 
 LogoDone:
             ; set color of counters
@@ -754,23 +753,12 @@ logo:       !byte %01100110,%00111110,%01111110,%11111110
 *=$07E8     ; CODE
 
 Start:
-            ; TEST: put some cards in hand -> but it's probably easiest if this array is continuous
-            lda #33
-            sta ZP_RNG_LOW              ; seed prng with some value
-
             jsr ClearAll
             jsr InitPlayersData
-            lda #5
-            sta AIData+PD_HAND
-            sta AIData+PD_HAND+3
-            lda #C_CANDY_LEADER
-            sta PlayerData+PD_HAND
-            lda #C_CANDY_LEADER+5
-            sta PlayerData+PD_HAND+1
-            lda #C_CANDY_LEADER+20
-            sta PlayerData+PD_HAND+2
-            lda #$32                    ; give player some energy left
-            sta $0400+24*40
+
+            ; DEBUG
+            lda #33                     ; TODO seed via D418
+            sta ZP_RNG_LOW              ; seed prng with some value
 
             ; setup random AI name
             jsr Random
@@ -833,6 +821,7 @@ Start:
             cpy #4*8
             bne -
 
+            ; select deck
             ldx #4
             jsr SetMaxIndexX0
 -           lda Index
@@ -846,15 +835,40 @@ Start:
             ldy #<($0400+15*40+(40-24)/2)
             lda #>($0400+15*40+(40-24)/2)
             jsr SetCursor
-            jsr SelectCard
-            lda Joystick
-            cmp #%11101111              ; FIRE
-            bne -
+            ; jsr SelectCard                ; DEBUG disabled
+            ; lda Joystick
+            ; cmp #%11101111              ; FIRE
+            ; bne -
 
-            ; copy selected deck into player deck
+            ; create selected deck as player deck
             lda Index                   ; 0,1,2,3
             jsr CreatePlayerDeck
 
+            jsr ClearAll
+            lda #COL_PLAIN
+            sta SuitCol
+            ldx #T_OPPONENT_NAME
+            ldy #<($0400+0*40+4)
+            lda #>($0400+0*40+4)
+            jsr SetCursorDrawTextX
+            ldy #<($0400+4*40)
+            lda #>($0400+4*40)
+            jsr SetCursorDrawCardBack
+            ldy #<($0400+15*40)
+            lda #>($0400+15*40)
+            jsr SetCursorDrawCardBack
+
+            ; pull first 3 cards for both
+            ldy #3
+-           ldx #PlayerData
+            jsr PullDeckCard
+            ldx #AIData
+            jsr PullDeckCard
+            dey
+            bne -
+
+            jsr DrawCounters
+            jsr DrawHealthBars
             jsr DrawAIHand
             jsr DrawPlayerHand
 
@@ -869,15 +883,6 @@ Start:
             ; ldy #<($0400+21*40+8)
             ; lda #>($0400+21*40+8)
             ; jsr SetCursorDrawCardText
-
-            ; jsr DrawHealthBars
-            ; jsr DrawCounters
-
-            ; lda #GREY
-            ; sta CharCol
-            ; jsr DrawStackSides
-            ; jsr ClearUpperLines
-            ; jsr ClearLowerLines
 
             ldy #<($0400+15*40+8+24)
             lda #>($0400+15*40+8+24)
@@ -901,6 +906,32 @@ Start:
 ; GAME SCREENS
 ;----------------------------------------------------------------------------
 
+; pull a card in hand for Player in X (clobbers A,X) returns pulled card# >0 in A (or 0)
+; if there's no room in hand, the card is lost
+PullDeckCard:
+            lda PD_REMAIN,x             ; A=remaining, X=offset to PD ($10/$50)
+            beq ++                      ; no cards left!
+            dec PD_REMAIN,x
+            clc
+            adc #PD_DECK-1              ; A=PD_DECK + remaining-1 (offset to card)
+            sta .fixupdeckptr
+            .fixupdeckptr=*+1
+            lda PD_DECK,x               ; A=card# SELF-MODIFIED
+            pha                         ; store card#
+            ; look for room in hand
+-           lda PD_HAND,x
+            cmp #$FF
+            bne +
+            pla                         ; found room
+            sta PD_HAND,x
+++          rts
++           inx
+            txa
+            and #%00000111
+            cmp #SIZEOF_HAND
+            bne -
+            pla                         ; no room
+            rts
 
 
 ;----------------------------------------------------------------------------
@@ -913,8 +944,8 @@ DrawAIHand:
             sta .fixuphandptr
             lda #<DrawPartialCardBack
             sta .fixupdrawcard
-            ldy #<($0400+0*40+10)
-            lda #>($0400+0*40+10)
+            ldy #<($0400+0*40+8)
+            lda #>($0400+0*40+8)
             bne .drawhand               ; always
 
 ; draws lower hand with visible Player cards (clobbers A,X,Y)
@@ -923,8 +954,8 @@ DrawPlayerHand:
             sta .fixuphandptr
             lda #<DrawPartialCard
             sta .fixupdrawcard
-            ldy #<($0400+23*40+10)
-            lda #>($0400+23*40+10)
+            ldy #<($0400+23*40+8)
+            lda #>($0400+23*40+8)
 .drawhand:
             jsr SetCursor
             ldx #SIZEOF_HAND
@@ -954,31 +985,6 @@ DrawPlayerHand:
             bne -
 +           rts
 
-; ; draws 2 lines left of the card backs to simulate the stack (this stays the same during the game)
-; DrawStackSides:
-;             ldy #<($0400+3*40)
-;             lda #>($0400+3*40)
-;             jsr SetCursorY0
-;             lda #112
-;             jsr .put2
-;             lda #CHR_SPACE
-;             jsr PutCharMoveDown
-;             ldy #<($0400+15*40)
-;             lda #>($0400+15*40)
-;             jsr SetCursorY0
-;             lda #CHR_SPACE
-;             jsr .put2
-;             lda #109
-;             jmp PutCharMoveDown
-;             ; common logic
-; .put2:      jsr PutCharMoveDown
-;             ldx #5
-; -           lda #66
-;             jsr PutCharMoveDown
-;             dex
-;             bne -
-;             rts
-
 ; clears the two lower lines (clobbers A,Y)
 ClearLowerLines: ; 14 bytes
             lda #CHR_SPACE
@@ -999,64 +1005,62 @@ ClearUpperLines: ; 14 bytes
             bpl -
             rts
 
-; ; draws both health bars (clobbers A,X,Y,Tmp1,cursor)
-; DrawHealthBars:
-;             ; upper player
-;             ldy #<($0400+39)
-;             lda #>($0400+39)
-;             jsr SetCursorY0
-;             lda #10
-;             sec
-;             sbc AIData+PD_LIFE
-;             tax
-;             lda #COL_HEALTH_OFF * 16 + COL_HEALTH_ON
-;             jsr .healthbar
-;             ; lower player
-;             ldy #<($0400+15*40+39)
-;             lda #>($0400+15*40+39)
-;             jsr SetCursorY0
-;             ldx PlayerData+PD_LIFE
-;             lda #COL_HEALTH_ON * 16 + COL_HEALTH_OFF
-;             ; fall through
+; draws both health bars (clobbers A,X,Y,Tmp1)
+DrawHealthBars:
+            lda #COL_HEALTH_ON
+            sta CharCol
+            lda #10
+            sec
+            sbc AIData+PD_LIFE
+            tax
+            ldy #<($0400+39)
+            lda #>($0400+39)
+            jsr .healthbar
+            lda #COL_HEALTH_OFF
+            sta CharCol
+            ldx PlayerData+PD_LIFE
+            ldy #<($0400+15*40+39)
+            lda #>($0400+15*40+39)
+            ; fall through
+.healthbar:
+            stx Tmp1
+            jsr SetCursor
+            ldx #10
+-           cpx Tmp1
+            bne +
+            ; switch color
+            lda CharCol
+            eor #COL_HEALTH_ON-COL_HEALTH_OFF ; NOTE: largest-smallest
+            sta CharCol
++           lda #$53                    ; heart
+            ldy #0
+            jsr DrawF_ACharCol
+            lda #40
+            jsr AddToCursor
+            dex
+            bne -
+            rts
 
-; ; draws X(0..10) as 10 high health bar in colors in A (2 nibbles) at cursor + Y (clobbers A,X,Tmp1,cursor)
-; .healthbar:
-;             sta CharCol
-;             stx Tmp1
-;             ldx #10
-; -           cpx Tmp1
-;             bne +
-;             ; switch to second color
-;             lsr CharCol
-;             lsr CharCol
-;             lsr CharCol
-;             lsr CharCol
-; +           lda #$53 ; heart
-;             jsr PutCharMoveDown
-;             dex
-;             bne -
-;             rts
-
-; ; draws energy and deck counters (clobbers A,X,Y)
-; DrawCounters:
-;             ; energy
-;             ldx #2
-; -           lda AIData+PD_ENERGY,x
-;             sta $0400,x
-;             lda PlayerData+PD_ENERGY,x
-;             sta $0400+24*40,x
-;             dex
-;             bpl -
-;             ; deck counters
-;             lda AIData+PD_REMAIN
-;             jsr AtoASCII2
-;             stx $0400+1*40
-;             sta $0400+1*40+1
-;             lda PlayerData+PD_REMAIN
-;             jsr AtoASCII2
-;             stx $0400+23*40
-;             sta $0400+23*40+1
-;             rts
+; draws energy and deck counters (clobbers A,X)
+DrawCounters:
+            ; energy
+            ldx #2
+-           lda AIData+PD_ENERGY,x
+            sta $0400,x
+            lda PlayerData+PD_ENERGY,x
+            sta $0400+24*40,x
+            dex
+            bpl -
+            ; deck counters
+            lda AIData+PD_REMAIN
+            jsr AtoASCII2
+            stx $0400+1*40
+            sta $0400+1*40+1
+            lda PlayerData+PD_REMAIN
+            jsr AtoASCII2
+            stx $0400+23*40
+            sta $0400+23*40+1
+            rts
 
 ; ; Converts .A to 3 ASCII/PETSCII digits: .Y = hundreds, .X = tens, .A = ones
 AtoASCII2: ; 20 bytes
