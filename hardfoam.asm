@@ -257,13 +257,116 @@ SuitTextData:
 ;############################################################################
 *=$01FA     ; DATA (01FA-028C = 147 bytes)
 
-            !fill 147,$EE ; remaining
+; clears the two lower lines (clobbers A,Y)
+ClearLowerLines: ; 14 bytes
+            lda #CHR_SPACE
+            ldy #38
+-           sta $0400+21*40,y
+            sta $0400+22*40,y
+            dey
+            bpl -
+            rts
+
+; clears two lines upper lines (clobbers A,Y)
+ClearUpperLines: ; 14 bytes
+            lda #CHR_SPACE
+            ldy #38
+-           sta $0400+2*40,y
+            sta $0400+3*40,y
+            dey
+            bpl -
+            rts
+
+; wipes the top and bottom of the screen completely (clobbers A,Y)
+ClearAll: ; 20 bytes
+            lda #CHR_SPACE
+            ldy #5*40
+-           sta $0400-1,y
+            sta $0400-1+5*40,y
+            sta $0400-1+15*40,y
+            sta $0400-1+20*40,y
+            dey
+            bne -
+            rts
+
+; draws both health bars (clobbers A,X,Y,Tmp1)
+DrawHealthBars:
+            lda #COL_HEALTH_ON
+            sta CharCol
+            lda #10
+            sec
+            sbc AIData+PD_LIFE
+            tax
+            ldy #<($0400+39)
+            lda #>($0400+39)
+            jsr .healthbar
+            lda #COL_HEALTH_OFF
+            sta CharCol
+            ldx PlayerData+PD_LIFE
+            ldy #<($0400+15*40+39)
+            lda #>($0400+15*40+39)
+            ; fall through
+.healthbar:
+            stx Tmp1
+            jsr SetCursor
+            ldx #10
+-           cpx Tmp1
+            bne +
+            ; switch color
+            lda CharCol
+            eor #COL_HEALTH_ON-COL_HEALTH_OFF ; NOTE: largest-smallest
+            sta CharCol
++           lda #$53                    ; heart
+            ldy #0
+            jsr DrawF_ACharCol
+            lda #40
+            jsr AddToCursor
+            dex
+            bne -
+            rts
+
+; draws energy and deck counters (clobbers A,X)
+DrawCounters:
+            ; energy
+            ldx #2
+-           lda AIData+PD_ENERGY,x
+            sta $0400,x
+            lda PlayerData+PD_ENERGY,x
+            sta $0400+24*40,x
+            dex
+            bpl -
+            ; deck counters
+            lda AIData+PD_REMAIN
+            jsr AtoASCII2
+            stx $0400+1*40
+            sta $0400+1*40+1
+            lda PlayerData+PD_REMAIN
+            jsr AtoASCII2
+            stx $0400+23*40
+            sta $0400+23*40+1
+            rts
 
 ;############################################################################
-*=$028D     ; 028D-028E (2 bytes) TRASHED DURING LOADING
-            !byte 0,0
+*=$028D     ; 028D-028E (first 2 bytes) TRASHED DURING LOADING
 
-            !fill 18,$EE ; remaining
+; Converts .A to 3 ASCII/PETSCII digits: .Y = hundreds, .X = tens, .A = ones
+AtoASCII2: ; 20 bytes (just 2 digits)
+            ; ldy #$2f
+            ldx #$3a                    ; $a2 $3a TODO: THESE 2 BYTES ARE TRASHED DURING LOADING
+            sec
+-           ; iny
+            sbc #100
+            ; bcs -
+-           dex
+            adc #10
+            bmi -
+            adc #$2f
+            ; <10 "9 "
+            cpx #$30
+            bne +
+            tax
+            lda #CHR_SPACE
++           rts
 
 ;############################################################################
 *=$02A1     ; RS232 Enables SHOULD STAY 0 DURING LOADING!
@@ -417,9 +520,7 @@ Alexander:
 *=$0400+3*40+(40-16)/2 ; $0484 above logo so it is still alive
             !scr "twain pain games" ; 16 bytes
 
-            ; 5 lines logo will overwrite from here
-
-*=$0400+5*40 ; 1224
+*=$0400+5*40 ; 04C8(1224) - 5 lines logo will overwrite from here
 INIT:
             ; disable IRQ to avoid KERNAL messing with keyboard
             ldy #%01111111
@@ -445,6 +546,12 @@ INIT:
             sta _Draw,x
             dex
             bpl -
+
+            ; restore 028D (first 2 bytes of AtoASCII2)
+            lda #$a2                    ; LDX
+            sta $028D
+            lda #$3a                    ; #$3A
+            sta $028E
 
             ; setup VIC
             lda #%10011011              ; screen on
@@ -770,7 +877,7 @@ Start:
             lda AINames+1,x
             sta opponent_name2
 
-            ; draw opponents name
+            ; draw "your opponent is"
             lda #COL_PLAIN
             sta SuitCol
             ldy #<($0400+5*40+9)
@@ -781,7 +888,6 @@ Start:
             ; pick random AI deck
             jsr Random
             and #$03                    ; 0..3 (deck#)
-            sta $0400                   ; DEBUG
             jsr CreatePlayerDeck
             ; copy to AI deck
             ldx #28-1
@@ -835,13 +941,14 @@ Start:
             ldy #<($0400+15*40+(40-24)/2)
             lda #>($0400+15*40+(40-24)/2)
             jsr SetCursor
-            ; jsr SelectCard                ; DEBUG disabled
-            ; lda Joystick
-            ; cmp #%11101111              ; FIRE
-            ; bne -
-
+!if DEBUG=0 {
+            jsr SelectCard                ; DEBUG disabled
+            lda Joystick
+            cmp #%11101111              ; FIRE
+            bne -
+}
             ; create selected deck as player deck
-            lda Index                   ; 0,1,2,3
+            lda Index                   ; 0..3
             jsr CreatePlayerDeck
 
             jsr ClearAll
@@ -867,12 +974,46 @@ Start:
             dey
             bne -
 
+            ; restore energy for player
+            ldx #PlayerData
+            jsr Energize
+            jsr Energize
+            jsr Energize
+            jsr Energize
+            jsr Energize
+            jsr Energize
+            lda #6
+            jsr DecreaseEnergy
+            lda #1
+            jsr DecreaseEnergy
+
             jsr DrawCounters
             jsr DrawHealthBars
             jsr DrawAIHand
             jsr DrawPlayerHand
 
             jmp *
+
+; X=playerData offset (clobbers Y)
+Energize: ; 12 bytes
+            ldy PD_MAXENERGY,x
+            cpy #$39
+            beq +
+            iny
+            sty PD_MAXENERGY,x
++           sty PD_ENERGY,x
+            rts
+
+; X=playerData offset, A=how much (clobbers A)
+DecreaseEnergy:
+            clc
+            sbc PD_ENERGY,x             ; A=A-(PD_ENERGY-1)
+            eor #$FF                    ; $100-A
+            cmp #$30
+            bcs +
+            lda #$30                    ; clamp at $30 ('0')
++           sta PD_ENERGY,x
+            rts
 
             ; ldy #<($0400+15*40+8)
             ; lda #>($0400+15*40+8)
@@ -984,122 +1125,6 @@ DrawPlayerHand:
             cmp #<(23*40+38)            ; end for Player hand
             bne -
 +           rts
-
-; clears the two lower lines (clobbers A,Y)
-ClearLowerLines: ; 14 bytes
-            lda #CHR_SPACE
-            ldy #38
--           sta $0400+21*40,y
-            sta $0400+22*40,y
-            dey
-            bpl -
-            rts
-
-; clears two lines upper lines - starts the lower with 4 line chars (clobbers A,X,Y)
-ClearUpperLines: ; 14 bytes
-            lda #CHR_SPACE
-            ldy #38
--           sta $0400+2*40,y
-            sta $0400+3*40,y
-            dey
-            bpl -
-            rts
-
-; draws both health bars (clobbers A,X,Y,Tmp1)
-DrawHealthBars:
-            lda #COL_HEALTH_ON
-            sta CharCol
-            lda #10
-            sec
-            sbc AIData+PD_LIFE
-            tax
-            ldy #<($0400+39)
-            lda #>($0400+39)
-            jsr .healthbar
-            lda #COL_HEALTH_OFF
-            sta CharCol
-            ldx PlayerData+PD_LIFE
-            ldy #<($0400+15*40+39)
-            lda #>($0400+15*40+39)
-            ; fall through
-.healthbar:
-            stx Tmp1
-            jsr SetCursor
-            ldx #10
--           cpx Tmp1
-            bne +
-            ; switch color
-            lda CharCol
-            eor #COL_HEALTH_ON-COL_HEALTH_OFF ; NOTE: largest-smallest
-            sta CharCol
-+           lda #$53                    ; heart
-            ldy #0
-            jsr DrawF_ACharCol
-            lda #40
-            jsr AddToCursor
-            dex
-            bne -
-            rts
-
-; draws energy and deck counters (clobbers A,X)
-DrawCounters:
-            ; energy
-            ldx #2
--           lda AIData+PD_ENERGY,x
-            sta $0400,x
-            lda PlayerData+PD_ENERGY,x
-            sta $0400+24*40,x
-            dex
-            bpl -
-            ; deck counters
-            lda AIData+PD_REMAIN
-            jsr AtoASCII2
-            stx $0400+1*40
-            sta $0400+1*40+1
-            lda PlayerData+PD_REMAIN
-            jsr AtoASCII2
-            stx $0400+23*40
-            sta $0400+23*40+1
-            rts
-
-; ; Converts .A to 3 ASCII/PETSCII digits: .Y = hundreds, .X = tens, .A = ones
-AtoASCII2: ; 20 bytes
-            ; ldy #$2f
-            ldx #$3a
-            sec
--           ; iny
-            sbc #100
-            ; bcs -
--           dex
-            adc #10
-            bmi -
-            adc #$2f
-            ; <10 "9 "
-            cpx #$30
-            bne +
-            tax
-            lda #CHR_SPACE
-+           rts
-
-; wipes the top and bottom of the screen completely (clobbers A,X)
-ClearAll: ; 27 bytes
-            ldx #5*40
-            lda #CHR_SPACE
--           sta $0400-1+15*40,x
-            sta $0400-1+20*40,x
-            dex
-            bne -
-            ; fall through
-
-; wipes the top of the screen completely (clobbers A,X)
-ClearUpper: ; 14 bytes
-            ldx #5*40
-            lda #CHR_SPACE
--           sta $0400-1,x
-            sta $0400-1+5*40,x
-            dex
-            bne -
-            rts
 
 
 ;----------------------------------------------------------------------------
