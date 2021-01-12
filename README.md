@@ -57,3 +57,11 @@ The deck will consist of the 7 x 4 selected cards, with 1 randomly replaced by t
 *=$07E8     ; CODE
 
 *=$1000     ; EOF
+
+### Optimization tricks
+
+- Use branches on known conditions ("always") instead of `jmp`, saving 1 byte.
+- For branches that point to an `rts` directly, point them at another existing `rts`, possibly saving 1 byte.
+- End routines with `jmp` instead of `jsr` + `rts`, saving 1 byte, avoiding stack usage and being faster.
+- Put routines in front of other routines to fall through instead of `jmp` saving 3 bytes.
+- Put an often used parameter setup like `lda #0` in front of a routine, saving 2 bytes per `jsr` call.

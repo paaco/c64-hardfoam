@@ -12,7 +12,6 @@
 ; Holes at $1ED-$01F9, $028D,$028E, $02A1, $0314-$032A (vectors) and $0400-$07E8 (screen)
 ; Keeping 5 screen rows for code adds 200 bytes
 
-; TODO: turn: take a card; if you now have 7 cards, discard one
 ; TODO: turn: play cards from your hand
 ; TODO: turn: attack with table cards (pick your own order, attack not required)
 ; TODO: end turn
@@ -59,7 +58,13 @@ COL_DISABLED=PURPLE
 COL_SELECTED=WHITE
 COL_HIGHER=GREEN
 COL_LOWER=LIGHT_RED
+; characters
 CHR_SPACE=32+DEBUG*10 ; space or star
+CHR_PLAY=30 ; arrow up
+CHR_NO_PLAY=86 ; cross
+CHR_ENDTURN=62 ; >
+;
+HAND_CARDWIDTH=4
 
 ; ZP addresses
 !addr _CursorPos=$02 ; ptr
@@ -83,7 +88,7 @@ CHR_SPACE=32+DEBUG*10 ; space or star
     PD_MAXENERGY=3  ; $30 .. $39
     PD_REMAIN=4     ; DECKSIZE-1 .. 0
     PD_HAND=5       ; 7 bytes (card#),$FF=no card
-    SIZEOF_HAND=7   ; max 7 cards
+    SIZEOF_HAND=6   ; max 6 cards
     PD_TABLE=12     ; 20 bytes 5*4 bytes (card#,atd,def,status)
       TD_CARD=0     ; card# $FF=no card
       TD_ATK=1      ; attack
@@ -235,7 +240,27 @@ DrawTextX:
             bne --
 ++          rts
 
-            !fill 47,$EE ; remaining
+; clears the two lower lines (clobbers A,Y)
+ClearLowerLines: ; 14 bytes
+            lda #CHR_SPACE
+            ldy #38
+-           sta $0400+21*40,y
+            sta $0400+22*40,y
+            dey
+            bpl -
+            rts
+
+; clears two lines upper lines (clobbers A,Y)
+ClearUpperLines: ; 14 bytes
+            lda #CHR_SPACE
+            ldy #38
+-           sta $0400+2*40,y
+            sta $0400+3*40,y
+            dey
+            bpl -
+            rts
+
+            !fill 24,$EE ; remaining
 
 ;############################################################################
 *=$01ED     ; DATA 13 bytes including return address (TRASHED WHILE LOADING)
@@ -257,26 +282,6 @@ SuitTextData:
 ;############################################################################
 *=$01FA     ; DATA (01FA-028C = 147 bytes)
 
-; clears the two lower lines (clobbers A,Y)
-ClearLowerLines: ; 14 bytes
-            lda #CHR_SPACE
-            ldy #38
--           sta $0400+21*40,y
-            sta $0400+22*40,y
-            dey
-            bpl -
-            rts
-
-; clears two lines upper lines (clobbers A,Y)
-ClearUpperLines: ; 14 bytes
-            lda #CHR_SPACE
-            ldy #38
--           sta $0400+2*40,y
-            sta $0400+3*40,y
-            dey
-            bpl -
-            rts
-
 ; wipes the top and bottom of the screen completely (clobbers A,Y)
 ClearAll: ; 20 bytes
             lda #CHR_SPACE
@@ -289,8 +294,27 @@ ClearAll: ; 20 bytes
             bne -
             rts
 
-; draws both health bars (clobbers A,X,Y,Tmp1)
-DrawHealthBars:
+; draws energy, deck counters and health bards (clobbers A,X,Y,Tmp1)
+DrawCounters:
+            ; energy
+            ldx #2
+-           lda AIData+PD_ENERGY,x
+            sta $0400,x
+            lda PlayerData+PD_ENERGY,x
+            sta $0400+24*40,x
+            dex
+            bpl -
+            ; deck counters
+            lda AIData+PD_REMAIN
+            jsr AtoASCII2
+            stx $0400+1*40
+            sta $0400+1*40+1
+            lda PlayerData+PD_REMAIN
+            jsr AtoASCII2
+            stx $0400+23*40
+            sta $0400+23*40+1
+
+            ; draw both health bars
             lda #COL_HEALTH_ON
             sta CharCol
             lda #10
@@ -325,34 +349,10 @@ DrawHealthBars:
             bne -
             rts
 
-; draws energy and deck counters (clobbers A,X)
-DrawCounters:
-            ; energy
-            ldx #2
--           lda AIData+PD_ENERGY,x
-            sta $0400,x
-            lda PlayerData+PD_ENERGY,x
-            sta $0400+24*40,x
-            dex
-            bpl -
-            ; deck counters
-            lda AIData+PD_REMAIN
-            jsr AtoASCII2
-            stx $0400+1*40
-            sta $0400+1*40+1
-            lda PlayerData+PD_REMAIN
-            jsr AtoASCII2
-            stx $0400+23*40
-            sta $0400+23*40+1
-            rts
-
-;############################################################################
-*=$028D     ; 028D-028E (first 2 bytes) TRASHED DURING LOADING
-
 ; Converts .A to 3 ASCII/PETSCII digits: .Y = hundreds, .X = tens, .A = ones
 AtoASCII2: ; 20 bytes (just 2 digits)
             ; ldy #$2f
-            ldx #$3a                    ; $a2 $3a TODO: THESE 2 BYTES ARE TRASHED DURING LOADING
+            ldx #$3a
             sec
 -           ; iny
             sbc #100
@@ -367,6 +367,13 @@ AtoASCII2: ; 20 bytes (just 2 digits)
             tax
             lda #CHR_SPACE
 +           rts
+
+            !fill 10,$EE ; remaining
+
+;############################################################################
+*=$028D     ; 028D-028E (first 2 bytes) TRASHED DURING LOADING
+
+            !fill 20,$EE ; remaining
 
 ;############################################################################
 *=$02A1     ; RS232 Enables SHOULD STAY 0 DURING LOADING!
@@ -546,12 +553,6 @@ INIT:
             sta _Draw,x
             dex
             bpl -
-
-            ; restore 028D (first 2 bytes of AtoASCII2)
-            lda #$a2                    ; LDX
-            sta $028D
-            lda #$3a                    ; #$3A
-            sta $028E
 
             ; setup VIC
             lda #%10011011              ; screen on
@@ -780,7 +781,7 @@ Logo:
             lda #<(logo+20)
             sta .logosrc
             jsr .drawlogo
-            dec .logoptr-2 ; remove #81 from screen
+            dec .logoptr-2              ; remove #81 ball from screen
 
             ; fill everything but the logo blue
 --          ldx #0
@@ -790,7 +791,7 @@ Logo:
 ---         cmp $d012 ; slow down
             bne ---
             iny
-            cpy #82
+            cpy #81+1                   ; compare with ball+1
             beq +
             .colorptr=*+1
             sta $d800,x
@@ -808,7 +809,7 @@ Logo:
 +           cmp #200
             bne +
             jsr .fixtwainpain
-+           cmp #$E8 ; end of screen
++           cmp #$E8                    ; end of screen
             bne --
             jsr .putalexander
 
@@ -823,11 +824,11 @@ Logo:
             .logosrc = *+1
 -           asl logo,x
             bcc +
-            lda #81
+            lda #81                     ; ball
             .logoptr = *+1
             sta $0400+1+5*40
             sta $d800+1+5*40
----         cmp $d012 ; slow down
+---         cmp $d012                   ; slow down
             bne ---
 +           inc .logoptr
             inc .logoptr+3
@@ -942,7 +943,7 @@ Start:
             lda #>($0400+15*40+(40-24)/2)
             jsr SetCursor
 !if DEBUG=0 {
-            jsr SelectCard                ; DEBUG disabled
+            jsr SelectCard
             lda Joystick
             cmp #%11101111              ; FIRE
             bne -
@@ -950,20 +951,6 @@ Start:
             ; create selected deck as player deck
             lda Index                   ; 0..3
             jsr CreatePlayerDeck
-
-            jsr ClearAll
-            lda #COL_PLAIN
-            sta SuitCol
-            ldx #T_OPPONENT_NAME
-            ldy #<($0400+0*40+4)
-            lda #>($0400+0*40+4)
-            jsr SetCursorDrawTextX
-            ldy #<($0400+4*40)
-            lda #>($0400+4*40)
-            jsr SetCursorDrawCardBack
-            ldy #<($0400+15*40)
-            lda #>($0400+15*40)
-            jsr SetCursorDrawCardBack
 
             ; pull first 3 cards for both
             ldy #3
@@ -974,77 +961,94 @@ Start:
             dey
             bne -
 
+            ; redraw screen with opponent at top
+            jsr ClearAll
+            lda #COL_PLAIN
+            sta SuitCol
+            ldx #T_OPPONENT_NAME
+            ldy #<($0400+0*40+4)
+            lda #>($0400+0*40+4)
+            jsr SetCursorDrawTextX
+            ldy #<($0400+4*40)
+            lda #>($0400+4*40)
+            jsr SetCursorDrawCardBack
+            jsr DrawAIHand
+
             ; restore energy for player
             ldx #PlayerData
             jsr Energize
-            jsr Energize
-            jsr Energize
-            jsr Energize
-            jsr Energize
-            jsr Energize
-            lda #6
-            jsr DecreaseEnergy
-            lda #1
-            jsr DecreaseEnergy
 
             jsr DrawCounters
-            jsr DrawHealthBars
-            jsr DrawAIHand
-            jsr DrawPlayerHand
 
-            jmp *
+            ; TODO: start of turn: select first possible hand card
+            ; TODO: if there is none, select first table card
+            ; TODO: if there is none, select END symbol
 
-; X=playerData offset (clobbers Y)
-Energize: ; 12 bytes
-            ldy PD_MAXENERGY,x
-            cpy #$39
-            beq +
-            iny
-            sty PD_MAXENERGY,x
-+           sty PD_ENERGY,x
-            rts
+            ; select from hand
+--          lda #0                      ; 0..SIZEOF_HAND-1=card, SIZEOF_HAND=END
+            sta SelectorIndex
 
-; X=playerData offset, A=how much (clobbers A)
-DecreaseEnergy:
-            clc
-            sbc PD_ENERGY,x             ; A=A-(PD_ENERGY-1)
-            eor #$FF                    ; $100-A
-            cmp #$30
-            bcs +
-            lda #$30                    ; clamp at $30 ('0')
-+           sta PD_ENERGY,x
-            rts
-
-            ; ldy #<($0400+15*40+8)
-            ; lda #>($0400+15*40+8)
-            ; jsr SetCursor
-            ; ldx #C_GOBLIN_LEADER
-            ; jsr DrawCard
-            ; ldx #C_GOBLIN_LEADER
-            ; ldy #<($0400+21*40+8)
-            ; lda #>($0400+21*40+8)
-            ; jsr SetCursorDrawCardText
-
-            ldy #<($0400+15*40+8+24)
-            lda #>($0400+15*40+8+24)
+            ; draw selected card for player (or card back)
+-           ldy #<($0400+15*40)
+            lda #>($0400+15*40)
             jsr SetCursor
-            ldy #PlayerData+PD_TABLE ; ZP offset into table (increases per SIZEOF_PD)
-            ; setup card on table
-            lda #C_GOBLIN_LEADER+5 ; card# (goes per 5)
-            sta TD_CARD,y
-            lda #1 ; tapped=1
-            sta TD_STATUS,y
-            lda #1
-            sta TD_ATK,y
-            lda #2
-            sta TD_DEF,y
-            jsr DrawTableCard
+            jsr ClearLowerLines         ; clears text area
+            ldy SelectorIndex
+            ldx PlayerData+PD_HAND,y
+            cpx #$FF
+            bne +
+            jsr DrawCardBack
+            jmp ++
++           txa
+            pha
+            jsr DrawCard
+            pla
+            tax
+            ldy #<($0400+21*40)
+            lda #>($0400+21*40)
+            jsr SetCursorDrawCardText
+
+++          jsr DrawPlayerHand
+            lda #COL_SELECTED
+            sta SuitCol
+            ldy #<($0400+23*40+35)
+            lda #>($0400+23*40)
+            ldx #T_END
+            jsr SetCursorDrawTextX
+
+            ; draw selection symbol
+            ldy #<($0400+23*40)
+            lda #>($0400+23*40)
+            jsr SetCursor
+            ldx SelectorIndex
+            cpx #SIZEOF_HAND
+            bne +
+            lda #CHR_ENDTURN
+            bne ++                      ; always
++           lda PlayerData+PD_HAND,x
+            cmp #$FF                    ; is there a card?
+            beq .no_energy              ; no card -> handle as if no energy
+            tay
+            lda Cards+CARD_LTSC,y
+            and #%00001111              ; LTSSCCCC
+            ora #$30                    ; same as energy on screen
+            cmp $0400+24*40             ; energy on screen
+            beq .can_afford
+            bcc .can_afford
+.no_energy: lda #CHR_NO_PLAY
+            bne ++                      ; always
+.can_afford:lda #CHR_PLAY
+++          ldy HandSelectorOffsets,x
+            jsr DrawF_ASuitCol
 
             jmp *
+
+HandSelectorOffsets:
+    !for i,0,6 { !byte 10+HAND_CARDWIDTH*i }
 
 
 ;----------------------------------------------------------------------------
-; GAME SCREENS
+; GAME FUNCTIONS
 ;----------------------------------------------------------------------------
 
 ; pull a card in hand for Player in X (clobbers A,X) returns pulled card# >0 in A (or 0)
@@ -1072,6 +1076,27 @@ PullDeckCard:
             cmp #SIZEOF_HAND
             bne -
             pla                         ; no room
+.stealrts3: rts
+
+; increase max energy and replenish energy of Player in X (clobbers Y)
+Energize: ; 12 bytes
+            ldy PD_MAXENERGY,x
+            cpy #$39
+            beq +
+            iny
+            sty PD_MAXENERGY,x
++           sty PD_ENERGY,x
+            rts
+
+; decrease energy (capping at 0) of Player in X (clobbers A)
+DecreaseEnergy:
+            clc
+            sbc PD_ENERGY,x             ; A=A-(PD_ENERGY-1)
+            eor #$FF                    ; $100-A
+            cmp #$30
+            bcs +
+            lda #$30                    ; clamp at $30 ('0')
++           sta PD_ENERGY,x
             rts
 
 
@@ -1079,7 +1104,7 @@ PullDeckCard:
 ; UI DRAWING
 ;----------------------------------------------------------------------------
 
-; draw upper hand with AI card backs (clobbers A,X,Y)
+; draw upper hand with AI card backs (clobbers A,X,Y,Index)
 DrawAIHand:
             lda #AIData+PD_HAND
             sta .fixuphandptr
@@ -1089,7 +1114,7 @@ DrawAIHand:
             lda #>($0400+0*40+8)
             bne .drawhand               ; always
 
-; draws lower hand with visible Player cards (clobbers A,X,Y)
+; draws lower hand with visible Player cards (clobbers A,X,Y,Index)
 DrawPlayerHand:
             lda #PlayerData+PD_HAND
             sta .fixuphandptr
@@ -1108,23 +1133,23 @@ DrawPlayerHand:
             tax
             .fixupdrawcard=*+1
             jsr DrawPartialCardBack
-            lda #4
+            lda #HAND_CARDWIDTH
             jsr AddToCursor
 +           jsr IncIndex
             bne -
             ; fill remainder after cursor with spaces
--           inc _CursorPos
+-           lda _CursorPos
+            cmp #38                     ; end for AI hand
+            beq .stealrts3
+            cmp #<(23*40+38)            ; end for Player hand
+            beq .stealrts3
+            inc _CursorPos
             lda #CHR_SPACE
             ldy #0
             sta (_CursorPos),y
             ldy #40
             sta (_CursorPos),y
-            lda _CursorPos
-            cmp #38                     ; end for AI hand
-            beq +
-            cmp #<(23*40+38)            ; end for Player hand
-            bne -
-+           rts
+            bne -                       ; always
 
 
 ;----------------------------------------------------------------------------
@@ -1320,7 +1345,7 @@ Cards:
     !byte 0 ; card# (offsets) should not be 0
     C_GOBLIN_LEADER=*-Cards
     !byte $C3, $32, N_GOBLIN_LEADER, E_ALL_GAIN11, G_LEGND_GOBLIN
-    !byte $41, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $01, $12, N_WANNABE,       T_NONE,       G_WANNABE
     !byte $42, $12, N_WANNABE,       T_NONE,       G_WANNABE
     !byte $43, $12, N_WANNABE,       T_NONE,       G_WANNABE
     !byte $44, $12, N_WANNABE,       T_NONE,       G_WANNABE
@@ -1418,6 +1443,8 @@ TextData:
     !byte M_2SPACES,M_PICK,M_A,M_DECK,M_2SPACES,0
     T_SUIT_DECK=*-TextData
     !byte M_SUIT,M_DECK,0
+    T_END=*-TextData
+    !byte M_END,0
 !if *-TextData >= $FF { !error "Out of TextData memory" }
 
 ; Text macros, each ends with a byte >= $80
@@ -1433,6 +1460,7 @@ MacroData:
     M_WANNABE     =*-MacroData+1 : !scr "wannab",'e'+$80
     M_FOAM        =*-MacroData+1 : !scr "foa",'m'+$80
     M_FOREVER     =*-MacroData+1 : !scr "foreve",'r'+$80
+    M_BLOCK       =*-MacroData+1 : !scr "bloc",'k'+$80
     M_YOUR        =*-MacroData+1 : !scr "you",'r'+$80
     M_OPPONENT    =*-MacroData+1 : !scr "opponen",'t'+$80
     M_IS          =*-MacroData+1 : !scr "i",'s'+$80
@@ -1443,10 +1471,12 @@ opponent_name2:                    !scr "p",'.'+$80 ; SELF-MODIFIED
     M_PICK        =*-MacroData+1 : !scr "pic",'k'+$80
     M_A           =*-MacroData+1 : !scr 'a'+$80
     M_DECK        =*-MacroData+1 : !scr "dec",'k'+$80
-    M_BLOCK       =*-MacroData+1 : !scr "bloc",'k'+$80
+    M_END         =*-MacroData+1 : !scr "en",'d'+$80
     M_ALL         =*-MacroData+1 : !scr "al",'l'+$80
     M_GAIN11      =*-MacroData+1 : !scr "gain ",78,'1',83,'1'+$80
 !if *-MacroData >= $FF { !error "Out of MacroData memory" }
+
+SIZEOF_TEXT=*-TextData
 
 ; DrawF_Frame source data, use $60/96 to skip over a char
 FrameData:
