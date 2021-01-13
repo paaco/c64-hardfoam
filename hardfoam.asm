@@ -349,12 +349,21 @@ DrawCounters:
             bne -
             rts
 
+;############################################################################
+*=$0277     ; 0277-0280 KEYBOARD BUFFER. SOME VERSIONS OF VICE TRASH 5 bytes HERE WITH: RUN:^M
+            !fill 5,0
+
+            !fill 17,$EE ; remaining
+
+;############################################################################
+*=$028D     ; 028D-028E (first 2 bytes) TRASHED DURING LOADING
+
 ; Converts .A to 3 ASCII/PETSCII digits: .Y = hundreds, .X = tens, .A = ones
-AtoASCII2: ; 20 bytes (just 2 digits)
+AtoASCII2: ; 20 bytes (for 2 digits)
             ; ldy #$2f
-            ldx #$3a
+            ldx #$3a                    ; $a2 $3a SELF-MODIFIED TRASHED DURING LOADING
             sec
--           ; iny
+; -           iny
             sbc #100
             ; bcs -
 -           dex
@@ -368,12 +377,7 @@ AtoASCII2: ; 20 bytes (just 2 digits)
             lda #CHR_SPACE
 +           rts
 
-            !fill 10,$EE ; remaining
-
-;############################################################################
-*=$028D     ; 028D-028E (first 2 bytes) TRASHED DURING LOADING
-
-            !fill 20,$EE ; remaining
+;            !fill 20,$EE ; remaining
 
 ;############################################################################
 *=$02A1     ; RS232 Enables SHOULD STAY 0 DURING LOADING!
@@ -546,6 +550,12 @@ INIT:
             sta Overwrite01ED,x
             dex
             bpl -
+
+            ; restore 028D-028E (AtoASCII2)
+            lda #$a2                    ; LDX
+            sta $028D
+            lda #$3a                    ; #$3a
+            sta $028E
 
             ; copy Draw function to ZP
             ldx #SIZEOF_DRAW-1
@@ -989,7 +999,7 @@ Start:
             sta SelectorIndex
 
             ; draw selected card for player (or card back)
--           ldy #<($0400+15*40)
+.redraw:    ldy #<($0400+15*40)
             lda #>($0400+15*40)
             jsr SetCursor
             jsr ClearLowerLines         ; clears text area
@@ -1041,7 +1051,17 @@ Start:
 ++          ldy HandSelectorOffsets,x
             jsr DrawF_ASuitCol
 
-            jmp *
+            jsr DebounceJoystick
+-           jsr ReadJoystick            ; 111FRLDU
+            beq -
+            cmp #%11110111              ; RIGHT
+            bne +
+            inc SelectorIndex
++           cmp #%11111011              ; LEFT
+            bne +
+            dec SelectorIndex
+
++           jmp .redraw
 
 HandSelectorOffsets:
     !for i,0,6 { !byte 10+HAND_CARDWIDTH*i }
