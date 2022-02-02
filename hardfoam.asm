@@ -1,16 +1,5 @@
-; HARD FOAM - a 2K card game
-; Developed for the https://itch.io/jam/the-c64-cassette-50-charity-competition
-
-; Only WRITES memory < $1000 and uses Dxxx IO, calling/reading KERNAL/BASIC is OK
-
-; Note that it is only required to load below $1000, not specifically $0801,
-; so we could even load at $0400 (not lower to keep Tape loading compatibility)
-; However, loading it there (anything below $0801) will kill RUN, only allow direct SYS
-; Exomizer also uses $0334-$03D0 as decrunching buffer; decrunching there will hang
-
-; Without packer it's possible to load and run $0120-$1000 giving 3808 bytes:
-; Holes at $1ED-$01F9, $028D,$028E, $02A1, $0314-$032A (vectors) and $0400-$07E8 (screen)
-; Keeping 5 screen rows for code adds 200 bytes
+; HARD FOAM - a 4K compressed card game
+; Developed for the https://ausretrogamer.com/2022-reset64-4kb-craptastic-game-competition
 
 ; TODO: turn: play cards from your hand
 ; TODO: turn: attack with table cards (pick your own order, attack not required)
@@ -107,7 +96,13 @@ SIZEOF_PD=64
 !addr _Draw=$E0     ; $E0-$F8 is block drawing routine
 
 ;############################################################################
-*=$0120     ; DATA (0120-01ED = 282 bytes)
+
+*=$0801
+!byte $0c,$08,$b5,$07,$9e,$20,$32,$30,$36,$32,$00,$00,$00
+
+start:
+            jmp INIT
+
 
 ;----------------------------------------------------------------------------
 ; CHARACTER DRAWING FUNCTIONS FOR DRAW
@@ -146,6 +141,7 @@ DrawF_ASuitCol: ; (clobbers A)
             rts
 
 !if (>DrawF_Frame != >DrawF_Frame) { !error "All DrawF functions must be in same page" }
+
 
 ;----------------------------------------------------------------------------
 ; CHARACTER DRAWING
@@ -199,6 +195,7 @@ SetCursor:
             eor #$DC                    ; turn 4/5/6/7 into $D8/9/A/B
             sta _ColorPos+1
             rts
+
 
 ;----------------------------------------------------------------------------
 ; TEXT DRAWING
@@ -259,28 +256,6 @@ ClearUpperLines: ; 14 bytes
             dey
             bpl -
             rts
-
-            !fill 24,$EE ; remaining
-
-;############################################################################
-*=$01ED     ; DATA 13 bytes including return address (TRASHED WHILE LOADING)
-Overwrite01ED:
-
-; initial PlayerData structure (rest is filled with $FF)
-InitData:
-    !scr 10, "0/0", 0
-SIZEOF_INITDATA = *-InitData
-
-SuitTextData:
-    !byte M_GOBLIN,M_POLYSTYRENE,M_CANDY,M_SOAP
-;SuitLeaders:
-;    !byte C_POLY_LEADER,C_CANDY_LEADER;,C_SOAP_LEADER,C_GOBLIN_LEADER
-
-*=$01F8     ; Override return value on stack with own start address
-            !word INIT-1
-
-;############################################################################
-*=$01FA     ; DATA (01FA-028C = 147 bytes)
 
 ; wipes the top and bottom of the screen completely (clobbers A,Y)
 ClearAll: ; 20 bytes
@@ -349,15 +324,6 @@ DrawCounters:
             bne -
             rts
 
-;############################################################################
-*=$0277     ; 0277-0280 KEYBOARD BUFFER. SOME VERSIONS OF VICE TRASH 5 bytes HERE WITH: RUN:^M
-            !fill 5,0
-
-            !fill 17,$EE ; remaining
-
-;############################################################################
-*=$028D     ; 028D-028E (first 2 bytes) TRASHED DURING LOADING
-
 ; Converts .A to 3 ASCII/PETSCII digits: .Y = hundreds, .X = tens, .A = ones
 AtoASCII2: ; 20 bytes (for 2 digits)
             ; ldy #$2f
@@ -377,11 +343,6 @@ AtoASCII2: ; 20 bytes (for 2 digits)
             lda #CHR_SPACE
 +           rts
 
-;            !fill 20,$EE ; remaining
-
-;############################################################################
-*=$02A1     ; RS232 Enables SHOULD STAY 0 DURING LOADING!
-            !byte 0
 
 ;----------------------------------------------------------------------------
 ; KEYBOARD / JOYSTICK INPUT
@@ -477,21 +438,9 @@ Random:
         sta ZP_RNG_HIGH ; x ^= x << 8 done
         rts
 
-        !fill 4,$EE ; remaining
 
 ;############################################################################
-*=$0314     ; IRQ, BRK and NMI Vectors to keep
-            !byte $31,$ea,$66,$fe,$47,$fe
-            !byte $4a,$f3,$91,$f2,$0e,$f2
-            !byte $50,$f2,$33,$f3,$57,$f1,$ca,$f1
-            !byte $ed,$f6 ; STOP vector - Essential to avoid JAM
-
-            ; DATA (032A-0400 = 214 bytes)
-            !fill 214,$EE ; remaining
-
-;############################################################################
-*=$0400     ; SCREEN (WILL BE WIPED)
-            jmp INIT
+; TODO LOGO CODE WAS LOCATED IN SCREEN STILL NEEDS SOME FIXING
 
 LogoDone:
             ; set color of counters
@@ -528,10 +477,10 @@ LogoDone:
 Alexander:
             !scrxor $AA, "a game by alexander paalvast" ; 28 bytes
 
-*=$0400+3*40+(40-16)/2 ; $0484 above logo so it is still alive
+;*=$0400+3*40+(40-16)/2 ; $0484 above logo so it is still alive
             !scr "twain pain games" ; 16 bytes
 
-*=$0400+5*40 ; 04C8(1224) - 5 lines logo will overwrite from here
+;*=$0400+5*40 ; 04C8(1224) - 5 lines logo will overwrite from here
 INIT:
             ; disable IRQ to avoid KERNAL messing with keyboard
             ldy #%01111111
@@ -539,23 +488,6 @@ INIT:
             sty $dd0d   ; Turn off CIAs Timer interrupts
             lda $dc0d   ; cancel all CIA-IRQs in queue/unprocessed
             lda $dd0d   ; cancel all CIA-IRQs in queue/unprocessed
-
-            ; move stack down to gain extra room from $120
-            ldx #$1f
-            txs
-
-            ; restore 01ED-01F9
-            ldx #SIZEOF_Overwrite01EDCopy-1
--           lda Overwrite01EDCopy,x
-            sta Overwrite01ED,x
-            dex
-            bpl -
-
-            ; restore 028D-028E (AtoASCII2)
-            lda #$a2                    ; LDX
-            sta $028D
-            lda #$3a                    ; #$3a
-            sta $028E
 
             ; copy Draw function to ZP
             ldx #SIZEOF_DRAW-1
@@ -586,14 +518,15 @@ INIT:
             jmp LogoDone
 }
 
-Overwrite01EDCopy:
-;InitData:
+; initial PlayerData structure (rest is filled with $FF)
+InitData:
     !scr 10, "0/0", 28
-;SuitTextData:
+SIZEOF_INITDATA = *-InitData
+
+SuitTextData:
     !byte M_GOBLIN,M_POLYSTYRENE,M_CANDY,M_SOAP
 ;SuitLeaders:
-;    !byte C_POLY_LEADER,C_CANDY_LEADER,C_SOAP_LEADER,C_GOBLIN_LEADER
-SIZEOF_Overwrite01EDCopy=*-Overwrite01EDCopy
+;    !byte C_POLY_LEADER,C_CANDY_LEADER;,C_SOAP_LEADER,C_GOBLIN_LEADER
 
 ; Draws rectangle 5x5 (upto 8x6) via DrawF function (clobbers A,Y)
 INITDRAW: ; 24 bytes incl configure (PIC)
@@ -617,9 +550,6 @@ INITDRAW: ; 24 bytes incl configure (PIC)
             rts
 }
 SIZEOF_DRAW=*-INITDRAW
-
-;############################################################################
-*=$0590     ; DATA (200 bytes, MIDDLE 5 SCREEN LINES ARE HIDDEN)
 
 ;----------------------------------------------------------------------------
 ; GAME FUNCTIONS
@@ -775,11 +705,9 @@ CardSelectorOffsets: ; max 6 cards can be selected (index 5)
     !for i,0,5 { !byte 2*40-1 + i*6 }
 
 ;############################################################################
-*=$0658     ; SCREEN (WILL BE WIPED)
+; TODO LOGO CODE WAS LOCATED IN SCREEN STILL NEEDS SOME FIXING
 
-            ; 5 lines logo will overwrite here
-
-*=$0658+5*40 ; in lowest 5*40=200 bytes (will not be overwritten with logo)
+;*=$0658+5*40 ; in lowest 5*40=200 bytes (will not be overwritten with logo)
 Logo:
             jsr .drawlogo
             ; set ptrs to lower part ($0659)
@@ -852,9 +780,7 @@ Logo:
             bne --
             rts
 
-            !fill 17,$EE ; remaining WIPED
-
-*=$0400+24*40
+;*=$0400+24*40
 logo:       !byte %01100110,%00111110,%01111110,%11111110
             !byte %11100111,%01100111,%11100111,%11100111
             !byte %11111111,%11111111,%11111110,%11100111
@@ -868,7 +794,6 @@ logo:       !byte %01100110,%00111110,%01111110,%11111110
             !byte %01100000,%01111110,%01100110,%11000110
 
 ;############################################################################
-*=$07E8     ; CODE
 
 Start:
             jsr ClearAll
@@ -1433,7 +1358,6 @@ GlyphData:
     !byte 17,17,97
     !byte 124,251,78
 
-    !fill (28-5)*9,$EE ; remaining for total 28 glyphs
 
 ;----------------------------------------------------------------------------
 ; TEXT
@@ -1527,7 +1451,5 @@ AINames:
     !scr "bd","jt","mg","rh"
 
 ;----------------------------------------------------------------------------
-; MAX 2K ALLOWED HERE
-;----------------------------------------------------------------------------
 !byte 0 ; DUMMY to show where we are in report
-!if * >= $1000 { !error "Out of memory" }
+!if * >= $1800 { !error "Out of memory - start compressing" }
