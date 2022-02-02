@@ -10,9 +10,7 @@
 ; TODO: AI turn: if there are no opponent table cards left, attack player
 ; TODO: AI end turn
 
-INTRO=0
-DEBUG=1
-!ifndef DEBUG {DEBUG=0}
+!ifndef DEBUG {DEBUG=1}
 !ifndef INTRO {INTRO=0}
 !if DEBUG=1 {
     !initmem $AA
@@ -1341,23 +1339,130 @@ GlyphData:
     !byte 73,104,85
     !byte 215,215,117
     !byte 81,73,41
+    G_2=*=GlyphData
+    !byte 73,104,85
+    !byte 118,215,215
+    !byte 40,58,87
+    G_3=*=GlyphData
+    !byte 73,104,104
+    !byte 85,108,108
+    !byte 40,58,87
+    G_4=*=GlyphData
+    !byte 104,104,85
+    !byte 251,251,117
+    !byte 87,58,29
+    G_5=*=GlyphData
+    !byte 78,77,85
+    !byte 87,87,62
+    !byte 95,58,62
+    G_6=*=GlyphData
+    !byte 32,85,73
+    !byte 233,160,93
+    !byte 95,105,32
+    G_7=*=GlyphData
+    !byte 32,92,92
+    !byte 92,102,163
+    !byte 163,163,102
+    G_8=*=GlyphData
+    !byte 32,30,32
+    !byte 32,66,32
+    !byte 233,226,223
     G_LEGND_POLY=*-GlyphData
     !byte 206,160,205
     !byte 160,182,160
     !byte 192,159,192
+    G_10=*=GlyphData
+    !byte 100,92,100
+    !byte 101,32,103
+    !byte 77,100,78
+    G_11=*=GlyphData
+    !byte 32,107,104
+    !byte 32,160,32
+    !byte 32,160,32
+    G_12=*=GlyphData
+    !byte 32,32,233
+    !byte 32,78,32
+    !byte 78,32,32
+    G_13=*=GlyphData
+    !byte 225,229,97
+    !byte 103,212,101
+    !byte 103,212,101
+    G_14=*=GlyphData
+    !byte 46,32,32
+    !byte 160,46,46
+    !byte 160,160,160
+    G_15=*=GlyphData
+    !byte 85,64,73
+    !byte 67,67,67
+    !byte 74,64,75
+    G_16=*=GlyphData
+    !byte 77,77,32
+    !byte 233,236,223
+    !byte 95,105,95
     G_LEGND_CANDY=*-GlyphData
     !byte 223,98,233
     !byte 160,160,160
     !byte 105,226,95
+    G_18=*=GlyphData
+    !byte 92,92,92
+    !byte 87,87,102
+    !byte 226,75,102
+    G_19=*=GlyphData
+    !byte 77,78,223
+    !byte 78,78,78
+    !byte 95,78,77
+    G_20=*=GlyphData
+    !byte 83,32,83
+    !byte 83,83,83
+    !byte 32,83,32
+    G_21=*=GlyphData
+    !byte 85,68,73
+    !byte 71,87,72
+    !byte 74,70,75
+    G_22=*=GlyphData
+    !byte 1,2,3
+    !byte 4,5,6
+    !byte 7,8,78
+    G_23=*=GlyphData
+    !byte 240,242,238
+    !byte 235,219,243
+    !byte 237,241,253
+    ; G_24=*=GlyphData
+    ; !byte 95,95,32
+    ; !byte 233,215,223
+    ; !byte 95,206,160
     G_LEGND_SOAP=*-GlyphData
     !byte 255,251,252
     !byte 160,160,160
     !byte 124,226,126
+    G_26=*=GlyphData
+    !byte 230,123,102
+    !byte 230,102,230
+    !byte 102,230,102
+    G_27=*=GlyphData
+    !byte 32,85,73
+    !byte 233,160,93
+    !byte 95,105,32
+    G_28=*=GlyphData
+    !byte 233,215,233
+    !byte 233,160,160
+    !byte 120,120,120
+    ; G_29=*=GlyphData
+    ; !byte 32,32,32
+    ; !byte 32,32,32
+    ; !byte 32,32,32
+    ; G_30=*=GlyphData
+    ; !byte 32,32,32
+    ; !byte 32,32,32
+    ; !byte 32,32,32
+    ; G_31=*=GlyphData
+    ; !byte 32,32,32
+    ; !byte 32,32,32
+    ; !byte 32,32,32
     G_WANNABE=*-GlyphData
     !byte 127,98,126
     !byte 17,17,97
     !byte 124,251,78
-
 
 ;----------------------------------------------------------------------------
 ; TEXT
