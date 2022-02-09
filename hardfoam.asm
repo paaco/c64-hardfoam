@@ -53,6 +53,8 @@ CHR_ENDTURN=62 ; >
 ;
 HAND_CARDWIDTH=4
 
+!addr SCREEN=$0400
+
 ; ZP addresses
 !addr _CursorPos=$02 ; ptr
 !addr _ColorPos=$04 ; ptr
@@ -80,7 +82,7 @@ HAND_CARDWIDTH=4
       TD_CARD=0     ; card# $FF=no card
       TD_ATK=1      ; attack
       TD_DEF=2      ; defense
-      TD_STATUS=3   ; status: 0=normal, 1=tapped, >=$80 selected
+      TD_STATUS=3   ; status: 0=normal, 1=tapped
       SIZEOF_TD=4
     PD_DECK=32      ; 32 bytes (card#)
 SIZEOF_PD=64
@@ -91,12 +93,12 @@ SIZEOF_PD=64
 ;!addr CardIdx=$92
 ;!addr TableIdx=$93
 ; Draws rectangle 5x5 (upto 8x6) via DrawF function (clobbers A,Y)
-!addr _Draw=$E0     ; $E0-$F8 is block drawing routine
+!addr _Draw=$E0     ; $E0-$F6 is block drawing routine
 
 ;############################################################################
 
 *=$0801
-!byte $0c,$08,$b5,$07,$9e,$20,$32,$30,$36,$32,$00,$00,$00
+!byte $0c,$08,<1974,>1974,$9e,$32,$30,$36,$31,$00,$00,$00
 
 start:
             jmp INIT
@@ -176,7 +178,7 @@ Draw:
 DrawWithOffset:
             jsr _Configure
             tax
-            jmp _Draw+2
+            jmp _Draw
 
 ; adds A to cursor (clobbers A,Y)
 AddToCursor:
@@ -235,12 +237,15 @@ DrawTextX:
             bne --
 ++          rts
 
+SuitTextData:
+    !byte M_GOBLIN,M_POLYSTYRENE,M_CANDY,M_SOAP
+
 ; clears the two lower lines (clobbers A,Y)
 ClearLowerLines: ; 14 bytes
             lda #CHR_SPACE
             ldy #38
--           sta $0400+21*40,y
-            sta $0400+22*40,y
+-           sta SCREEN+21*40,y
+            sta SCREEN+22*40,y
             dey
             bpl -
             rts
@@ -249,8 +254,8 @@ ClearLowerLines: ; 14 bytes
 ClearUpperLines: ; 14 bytes
             lda #CHR_SPACE
             ldy #38
--           sta $0400+2*40,y
-            sta $0400+3*40,y
+-           sta SCREEN+2*40,y
+            sta SCREEN+3*40,y
             dey
             bpl -
             rts
@@ -259,10 +264,10 @@ ClearUpperLines: ; 14 bytes
 ClearAll: ; 20 bytes
             lda #CHR_SPACE
             ldy #5*40
--           sta $0400-1,y
-            sta $0400-1+5*40,y
-            sta $0400-1+15*40,y
-            sta $0400-1+20*40,y
+-           sta SCREEN-1,y
+            sta SCREEN-1+5*40,y
+            sta SCREEN-1+15*40,y
+            sta SCREEN-1+20*40,y
             dey
             bne -
             rts
@@ -272,20 +277,20 @@ DrawCounters:
             ; energy
             ldx #2
 -           lda AIData+PD_ENERGY,x
-            sta $0400,x
+            sta SCREEN,x
             lda PlayerData+PD_ENERGY,x
-            sta $0400+24*40,x
+            sta SCREEN+24*40,x
             dex
             bpl -
             ; deck counters
             lda AIData+PD_REMAIN
             jsr AtoASCII2
-            stx $0400+1*40
-            sta $0400+1*40+1
+            stx SCREEN+1*40
+            sta SCREEN+1*40+1
             lda PlayerData+PD_REMAIN
             jsr AtoASCII2
-            stx $0400+23*40
-            sta $0400+23*40+1
+            stx SCREEN+23*40
+            sta SCREEN+23*40+1
 
             ; draw both health bars
             lda #COL_HEALTH_ON
@@ -294,14 +299,14 @@ DrawCounters:
             sec
             sbc AIData+PD_LIFE
             tax
-            ldy #<($0400+39)
-            lda #>($0400+39)
+            ldy #<(SCREEN+39)
+            lda #>(SCREEN+39)
             jsr .healthbar
             lda #COL_HEALTH_OFF
             sta CharCol
             ldx PlayerData+PD_LIFE
-            ldy #<($0400+15*40+39)
-            lda #>($0400+15*40+39)
+            ldy #<(SCREEN+15*40+39)
+            lda #>(SCREEN+15*40+39)
             ; fall through
 .healthbar:
             stx Tmp1
@@ -325,7 +330,7 @@ DrawCounters:
 ; Converts .A to 3 ASCII/PETSCII digits: .Y = hundreds, .X = tens, .A = ones
 AtoASCII2: ; 20 bytes (for 2 digits)
             ; ldy #$2f
-            ldx #$3a                    ; $a2 $3a SELF-MODIFIED TRASHED DURING LOADING
+            ldx #$3a
             sec
 ; -           iny
             sbc #100
@@ -437,48 +442,10 @@ Random:
         rts
 
 
-;############################################################################
-; TODO LOGO CODE WAS LOCATED IN SCREEN STILL NEEDS SOME FIXING
+;----------------------------------------------------------------------------
+; INIT
+;----------------------------------------------------------------------------
 
-LogoDone:
-            ; set color of counters
-            ldx #3-1
--           lda #COL_HEALTH_ON
-            sta $D800,x
-            sta $D800+24*40,x
-            lda #COL_PLAIN
-            sta $D800+40,x
-            sta $D800+23*40,x
-            dex
-            bpl -
-            jmp Start
-
-.fixtwainpain:
-            ldx #15
-            lda #COL_LEGEND
--           sta $d884,x
-            dex
-            bpl -
-            rts
-
-.putalexander:
-            ldx #28-1
--           lda Alexander,x
-            eor #$AA
-            sta $0400+21*40+(40-28)/2,x
-            lda #COL_LEGEND
-            sta $D800+21*40+(40-28)/2,x
-            dex
-            bpl -
-            rts
-
-Alexander:
-            !scrxor $AA, "a game by alexander paalvast" ; 28 bytes
-
-;*=$0400+3*40+(40-16)/2 ; $0484 above logo so it is still alive
-            !scr "twain pain games" ; 16 bytes
-
-;*=$0400+5*40 ; 04C8(1224) - 5 lines logo will overwrite from here
 INIT:
             ; disable IRQ to avoid KERNAL messing with keyboard
             ldy #%01111111
@@ -516,20 +483,10 @@ INIT:
             jmp LogoDone
 }
 
-; initial PlayerData structure (rest is filled with $FF)
-InitData:
-    !scr 10, "0/0", 28
-SIZEOF_INITDATA = *-InitData
-
-SuitTextData:
-    !byte M_GOBLIN,M_POLYSTYRENE,M_CANDY,M_SOAP
-;SuitLeaders:
-;    !byte C_POLY_LEADER,C_CANDY_LEADER;,C_SOAP_LEADER,C_GOBLIN_LEADER
-
-; Draws rectangle 5x5 (upto 8x6) via DrawF function (clobbers A,Y)
-INITDRAW: ; 24 bytes incl configure (PIC)
+; Draws rectangle 5x5 (upto 8x6) via DrawF function, offset in Y (clobbers A,Y)
+INITDRAW:
 !pseudopc _Draw {
-            ldy #0
+            ;ldy #0 ; never used
             .drawfptr=*+1
 -           jsr DrawF_Frame             ; (1) change low byte of ptr to other routine
             iny
@@ -549,10 +506,12 @@ INITDRAW: ; 24 bytes incl configure (PIC)
 }
 SIZEOF_DRAW=*-INITDRAW
 
+
 ;----------------------------------------------------------------------------
 ; GAME FUNCTIONS
 ;----------------------------------------------------------------------------
 
+; reset all player data (energy, deck, table)
 InitPlayersData:
             ldx #SIZEOF_PD-1
 -           lda #$FF
@@ -567,6 +526,11 @@ InitPlayersData:
             dex
             bpl -
             rts
+
+; initial PlayerData structure (rest is filled with $FF)
+InitData:
+    !scr 10, "0/0", 28
+SIZEOF_INITDATA = *-InitData
 
 ; copy deck# in A into PlayerData deck, unpacks and shuffles (clobbers A,X,Y)
 CreatePlayerDeck:
@@ -702,96 +666,10 @@ DrawSelector:
 CardSelectorOffsets: ; max 6 cards can be selected (index 5)
     !for i,0,5 { !byte 2*40-1 + i*6 }
 
-;############################################################################
-; TODO LOGO CODE WAS LOCATED IN SCREEN STILL NEEDS SOME FIXING
 
-;*=$0658+5*40 ; in lowest 5*40=200 bytes (will not be overwritten with logo)
-Logo:
-            jsr .drawlogo
-            ; set ptrs to lower part ($0659)
-            lda #$59
-            sta .logoptr
-            sta .logoptr+3
-            inc .logoptr+1
-            inc .logoptr+3+1
-            lda #<(logo+20)
-            sta .logosrc
-            jsr .drawlogo
-            dec .logoptr-2              ; remove #81 ball from screen
-
-            ; fill everything but the logo blue
---          ldx #0
-            lda #BLUE-DEBUG
-            .screenptr=*+1
--           ldy $0400,x
----         cmp $d012 ; slow down
-            bne ---
-            iny
-            cpy #81+1                   ; compare with ball+1
-            beq +
-            .colorptr=*+1
-            sta $d800,x
-+           inx
-            cpx #200
-            bne -
-            lda .screenptr
-            clc
-            adc #200
-            sta .screenptr
-            sta .colorptr
-            bcc +
-            inc .screenptr+1
-            inc .colorptr+1
-+           cmp #200
-            bne +
-            jsr .fixtwainpain
-+           cmp #$E8                    ; end of screen
-            bne --
-            jsr .putalexander
-
-            jsr DebounceJoystick
--           jsr ReadJoystick
-            beq -
-            jmp LogoDone
-
-.drawlogo:
-            ldx #0
---          ldy #10 ; 10 pixels = 8 from the byte and 2 empty
-            .logosrc = *+1
--           asl logo,x
-            bcc +
-            lda #81                     ; ball
-            .logoptr = *+1
-            sta $0400+1+5*40
-            sta $d800+1+5*40
----         cmp $d012                   ; slow down
-            bne ---
-+           inc .logoptr
-            inc .logoptr+3
-            bne +
-            inc .logoptr+1
-            inc .logoptr+3+1
-+           dey
-            bne -
-            inx
-            cpx #4*5
-            bne --
-            rts
-
-;*=$0400+24*40
-logo:       !byte %01100110,%00111110,%01111110,%11111110
-            !byte %11100111,%01100111,%11100111,%11100111
-            !byte %11111111,%11111111,%11111110,%11100111
-            !byte %11100111,%11100111,%11101100,%11100111
-            !byte %01100110,%01100110,%01100111,%11111110
-
-            !byte %01111111,%01111110,%00111110,%11101110
-            !byte %11100000,%11100111,%01100111,%11111111
-            !byte %11111100,%11100111,%11111111,%11011011
-            !byte %11100000,%11100111,%11100111,%11000011
-            !byte %01100000,%01111110,%01100110,%11000110
-
-;############################################################################
+;----------------------------------------------------------------------------
+; START
+;----------------------------------------------------------------------------
 
 Start:
             jsr ClearAll
@@ -814,8 +692,8 @@ Start:
             ; draw "your opponent is"
             lda #COL_PLAIN
             sta SuitCol
-            ldy #<($0400+5*40+9)
-            lda #>($0400+5*40+9)
+            ldy #<(SCREEN+5*40+9)
+            lda #>(SCREEN+5*40+9)
             ldx #T_YOUR_OPPONENT_IS ; 21
             jsr SetCursorDrawTextX
 
@@ -831,8 +709,8 @@ Start:
             bpl -
 
             ; pick your deck
-            ldy #<($0400+9*40+(40-17)/2)
-            lda #>($0400+9*40+(40-17)/2)
+            ldy #<(SCREEN+9*40+(40-17)/2)
+            lda #>(SCREEN+9*40+(40-17)/2)
             ldx #T_PICK_DECK ; 17
             jsr SetCursorDrawTextX
             ; invert at cursor
@@ -845,8 +723,8 @@ Start:
             bne -
 
             ; draw first card of each deck (8 bytes apart)
-            ldy #<($0400+15*40+(40-24)/2)
-            lda #>($0400+15*40+(40-24)/2)
+            ldy #<(SCREEN+15*40+(40-24)/2)
+            lda #>(SCREEN+15*40+(40-24)/2)
             jsr SetCursor
             ldy #0
 -           sty Tmp1
@@ -867,13 +745,13 @@ Start:
 -           lda Index
             sta Suit
             jsr ClearLowerLines
-            ldy #<($0400+21*40+(40-24)/2)
-            lda #>($0400+21*40+(40-24)/2)
+            ldy #<(SCREEN+21*40+(40-24)/2)
+            lda #>(SCREEN+21*40+(40-24)/2)
             ldx #T_SUIT_DECK
             jsr SetCursorDrawTextX
 
-            ldy #<($0400+15*40+(40-24)/2)
-            lda #>($0400+15*40+(40-24)/2)
+            ldy #<(SCREEN+15*40+(40-24)/2)
+            lda #>(SCREEN+15*40+(40-24)/2)
             jsr SetCursor
 !if DEBUG=0 {
             jsr SelectCard
@@ -899,11 +777,11 @@ Start:
             lda #COL_PLAIN
             sta SuitCol
             ldx #T_OPPONENT_NAME
-            ldy #<($0400+0*40+4)
-            lda #>($0400+0*40+4)
+            ldy #<(SCREEN+0*40+4)
+            lda #>(SCREEN+0*40+4)
             jsr SetCursorDrawTextX
-            ldy #<($0400+4*40)
-            lda #>($0400+4*40)
+            ldy #<(SCREEN+4*40)
+            lda #>(SCREEN+4*40)
             jsr SetCursorDrawCardBack
             jsr DrawAIHand
 
@@ -922,8 +800,8 @@ Start:
             sta SelectorIndex
 
             ; draw selected card for player (or card back)
-.redraw:    ldy #<($0400+15*40)
-            lda #>($0400+15*40)
+.redraw:    ldy #<(SCREEN+15*40)
+            lda #>(SCREEN+15*40)
             jsr SetCursor
             jsr ClearLowerLines         ; clears text area
             ldy SelectorIndex
@@ -937,21 +815,21 @@ Start:
             jsr DrawCard
             pla
             tax
-            ldy #<($0400+21*40)
-            lda #>($0400+21*40)
+            ldy #<(SCREEN+21*40)
+            lda #>(SCREEN+21*40)
             jsr SetCursorDrawCardText
 
 ++          jsr DrawPlayerHand
             lda #COL_SELECTED
             sta SuitCol
-            ldy #<($0400+23*40+35)
-            lda #>($0400+23*40)
+            ldy #<(SCREEN+23*40+35)
+            lda #>(SCREEN+23*40)
             ldx #T_END
             jsr SetCursorDrawTextX
 
             ; draw selection symbol
-            ldy #<($0400+23*40)
-            lda #>($0400+23*40)
+            ldy #<(SCREEN+23*40)
+            lda #>(SCREEN+23*40)
             jsr SetCursor
             ldx SelectorIndex
             cpx #SIZEOF_HAND
@@ -965,7 +843,7 @@ Start:
             lda Cards+CARD_LTSC,y
             and #%00001111              ; LTSSCCCC
             ora #$30                    ; same as energy on screen
-            cmp $0400+24*40             ; energy on screen
+            cmp SCREEN+24*40            ; energy on screen
             beq .can_afford
             bcc .can_afford
 .no_energy: lda #CHR_NO_PLAY
@@ -1053,8 +931,8 @@ DrawAIHand:
             sta .fixuphandptr
             lda #<DrawPartialCardBack
             sta .fixupdrawcard
-            ldy #<($0400+0*40+8)
-            lda #>($0400+0*40+8)
+            ldy #<(SCREEN+0*40+8)
+            lda #>(SCREEN+0*40+8)
             bne .drawhand               ; always
 
 ; draws lower hand with visible Player cards (clobbers A,X,Y,Index)
@@ -1063,8 +941,8 @@ DrawPlayerHand:
             sta .fixuphandptr
             lda #<DrawPartialCard
             sta .fixupdrawcard
-            ldy #<($0400+23*40+8)
-            lda #>($0400+23*40+8)
+            ldy #<(SCREEN+23*40+8)
+            lda #>(SCREEN+23*40+8)
 .drawhand:
             jsr SetCursor
             ldx #SIZEOF_HAND
@@ -1240,7 +1118,7 @@ DrawPartialCardBack:
 DrawPartialCard:
             jsr DecorateFrame
             ; override color if cost too high
-            lda $0400+24*40             ; energy on screen
+            lda SCREEN+24*40            ; energy on screen
             ora #$B0                    ; $B0..$B9 (same as on card)
             cmp frame_COST              ; energy-cost
             bpl +                       ; 0+ OK
@@ -1554,6 +1432,133 @@ frame_DEF: !byte $B0
 
 AINames:
     !scr "bd","jt","mg","rh"
+
+
+;----------------------------------------------------------------------------
+; LOGO INTRO SCREEN
+;----------------------------------------------------------------------------
+
+Logo:
+            jsr .drawlogo
+            ; set ptrs to lower part ($0659)
+            lda #$59
+            sta .logoptr
+            sta .logoptr+3
+            inc .logoptr+1
+            inc .logoptr+3+1
+            lda #<(logo+20)
+            sta .logosrc
+            jsr .drawlogo
+            dec .logoptr-2              ; remove #81 ball from screen
+
+            ; fill everything but the logo blue
+--          ldx #0
+            lda #BLUE-DEBUG
+            .screenptr=*+1
+-           ldy SCREEN,x
+---         cmp $d012 ; slow down
+            bne ---
+            iny
+            cpy #81+1                   ; compare with ball+1
+            beq +
+            .colorptr=*+1
+            sta $d800,x
++           inx
+            cpx #200
+            bne -
+            lda .screenptr
+            clc
+            adc #200
+            sta .screenptr
+            sta .colorptr
+            bcc +
+            inc .screenptr+1
+            inc .colorptr+1
++           cmp #200
+            bne +
+            jsr .fixtwainpain
++           cmp #$E8                    ; end of screen
+            bne --
+            jsr .putalexander
+
+            jsr DebounceJoystick
+-           jsr ReadJoystick
+            beq -
+            ; fall through
+
+LogoDone:
+            ; set color of counters
+            ldx #3-1
+-           lda #COL_HEALTH_ON
+            sta $D800,x
+            sta $D800+24*40,x
+            lda #COL_PLAIN
+            sta $D800+40,x
+            sta $D800+23*40,x
+            dex
+            bpl -
+            jmp Start
+
+.fixtwainpain:
+            ldx #15
+            lda #COL_LEGEND
+-           sta $d884,x
+            dex
+            bpl -
+            rts
+
+.putalexander:
+            ldx #28-1
+-           lda Alexander,x
+            eor #$AA
+            sta SCREEN+21*40+(40-28)/2,x
+            lda #COL_LEGEND
+            sta $D800+21*40+(40-28)/2,x
+            dex
+            bpl -
+            rts
+
+Alexander:
+            !scrxor $AA, "a game by alexander paalvast" ; 28 bytes
+; TODO put at right place on screen
+            !scr "twain pain games" ; 16 bytes
+
+.drawlogo:
+            ldx #0
+--          ldy #10 ; 10 pixels = 8 from the byte and 2 empty
+            .logosrc = *+1
+-           asl logo,x
+            bcc +
+            lda #81                     ; ball
+            .logoptr = *+1
+            sta SCREEN+1+5*40
+            sta $d800+1+5*40
+---         cmp $d012                   ; slow down
+            bne ---
++           inc .logoptr
+            inc .logoptr+3
+            bne +
+            inc .logoptr+1
+            inc .logoptr+3+1
++           dey
+            bne -
+            inx
+            cpx #4*5
+            bne --
+            rts
+
+logo:       !byte %01100110,%00111110,%01111110,%11111110
+            !byte %11100111,%01100111,%11100111,%11100111
+            !byte %11111111,%11111111,%11111110,%11100111
+            !byte %11100111,%11100111,%11101100,%11100111
+            !byte %01100110,%01100110,%01100111,%11111110
+
+            !byte %01111111,%01111110,%00111110,%11101110
+            !byte %11100000,%11100111,%01100111,%11111111
+            !byte %11111100,%11100111,%11111111,%11011011
+            !byte %11100000,%11100111,%11100111,%11000011
+            !byte %01100000,%01111110,%01100110,%11000110
+
 
 ;----------------------------------------------------------------------------
 !byte 0 ; DUMMY to show where we are in report
