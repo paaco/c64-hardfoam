@@ -13,7 +13,7 @@ void main()
 {
     printf("GlyphData:\n");
     for (int i=0; i<MAXGLYPHS; i++) {
-        printf("    G_%d=*=GlyphData\n", i+1);
+        printf("    G_%d=*-GlyphData\n", i+1);
         int xo = (i % 8) * 5;
         int yo = (i / 8) * 6 * 40;
         int offset = 2 + 41 + xo + yo;
