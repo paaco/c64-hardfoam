@@ -765,10 +765,8 @@ Start:
 
             ; pull first 3 cards for both
             ldy #3
--           ldx #PlayerData
-            jsr PullDeckCard
-            ldx #AIData
-            jsr PullDeckCard
+-           jsr PullPlayerDeckCard
+            jsr PullAIDeckCard
             dey
             bne -
 
@@ -823,7 +821,7 @@ Start:
             lda #COL_SELECTED
             sta SuitCol
             ldy #<(SCREEN+23*40+35)
-            lda #>(SCREEN+23*40)
+            lda #>(SCREEN+23*40+35)
             ldx #T_END
             jsr SetCursorDrawTextX
 
@@ -836,14 +834,13 @@ Start:
             bne +
             lda #CHR_ENDTURN
             bne ++                      ; always
-+           lda PlayerData+PD_HAND,x
-            cmp #$FF                    ; is there a card?
++           ldy PlayerData+PD_HAND,x
+            cpy #$FF                    ; is there a card?
             beq .no_energy              ; no card -> handle as if no energy
-            tay
             lda Cards+CARD_LTSC,y
             and #%00001111              ; LTSSCCCC
-            ora #$30                    ; same as energy on screen
-            cmp SCREEN+24*40            ; energy on screen
+            ora #$30                    ; $30..$39 as energy
+            cmp PlayerData+PD_ENERGY
             beq .can_afford
             bcc .can_afford
 .no_energy: lda #CHR_NO_PLAY
@@ -861,6 +858,27 @@ Start:
 +           cmp #%11111011              ; LEFT
             bne +
             dec SelectorIndex
++           cmp #%11101111              ; FIRE
+            bne +
+            ; place card on table if possible
+            ldx SelectorIndex
+            lda #CHR_PLAY
+            ldy HandSelectorOffsets,x
+            cmp (_CursorPos),y
+            bne +                       ; not possible
+
+            ; cast card X from hand
+            jsr CastPlayerCard
+
+            ; redraw screen
+            jsr DrawCounters
+            jsr DrawPlayerHand
+            ; draw card(s) on table
+            ldy #<(SCREEN+15*40+(40-24)/2)
+            lda #>(SCREEN+15*40+(40-24)/2)
+            jsr SetCursor
+            ldy #PlayerData+PD_TABLE
+            jsr DrawTableCard
 
 +           jmp .redraw
 
@@ -872,35 +890,53 @@ HandSelectorOffsets:
 ; GAME FUNCTIONS
 ;----------------------------------------------------------------------------
 
-; pull a card in hand for Player in X (clobbers A,X) returns pulled card# >0 in A (or 0)
+; pull a card in hand for Player (clobbers A,X) returns 0 when no cards were left
 ; if there's no room in hand, the card is lost
-PullDeckCard:
-            lda PD_REMAIN,x             ; A=remaining, X=offset to PD ($10/$50)
-            beq ++                      ; no cards left!
-            dec PD_REMAIN,x
-            clc
-            adc #PD_DECK-1              ; A=PD_DECK + remaining-1 (offset to card)
-            sta .fixupdeckptr
-            .fixupdeckptr=*+1
-            lda PD_DECK,x               ; A=card# SELF-MODIFIED
-            pha                         ; store card#
-            ; look for room in hand
--           lda PD_HAND,x
+; TODO can you make this generic again when using also Y
+PullPlayerDeckCard:
+            lda PlayerData+PD_REMAIN
+            beq +                       ; no cards left
+            dec PlayerData+PD_REMAIN
+            ; is hand full?
+            lda PlayerData+PD_HAND+SIZEOF_HAND-1
             cmp #$FF
-            bne +
-            pla                         ; found room
-            sta PD_HAND,x
-++          rts
-+           inx
-            txa
-            and #%00000111
-            cmp #SIZEOF_HAND
-            bne -
-            pla                         ; no room
-.stealrts3: rts
+            bne +                       ; hand full (A can be anything)
+            ; move cards
+            ldx #SIZEOF_HAND-2
+-           lda PlayerData+PD_HAND,x
+            sta PlayerData+PD_HAND+1,x
+            dex
+            bpl -
+            ; store card
+            ldx PlayerData+PD_REMAIN
+            lda PlayerData+PD_DECK,x
+            sta PlayerData+PD_HAND      ; card# is never 0 so A<>0
++           rts
+
+; pull a card in hand for AI (clobbers A,X) returns 0 when no cards were left
+; if there's no room in hand, the card is lost
+PullAIDeckCard:
+            lda AIData+PD_REMAIN
+            beq +                       ; no cards left
+            dec AIData+PD_REMAIN
+            ; is hand full?
+            lda AIData+PD_HAND+SIZEOF_HAND-1
+            cmp #$FF
+            bne +                       ; hand full (A can be anything)
+            ; move cards
+            ldx #SIZEOF_HAND-2
+-           lda AIData+PD_HAND,x
+            sta AIData+PD_HAND+1,x
+            dex
+            bpl -
+            ; store card
+            ldx AIData+PD_REMAIN
+            lda AIData+PD_DECK,x
+            sta AIData+PD_HAND      ; card# is never 0 so A<>0
++           rts
 
 ; increase max energy and replenish energy of Player in X (clobbers Y)
-Energize: ; 12 bytes
+Energize:
             ldy PD_MAXENERGY,x
             cpy #$39
             beq +
@@ -909,15 +945,49 @@ Energize: ; 12 bytes
 +           sty PD_ENERGY,x
             rts
 
-; decrease energy (capping at 0) of Player in X (clobbers A)
+; decrease energy of Player in X by A (clobbers A) returns C=1 success, C=0 failed
 DecreaseEnergy:
             clc
             sbc PD_ENERGY,x             ; A=A-(PD_ENERGY-1)
             eor #$FF                    ; $100-A
             cmp #$30
-            bcs +
-            lda #$30                    ; clamp at $30 ('0')
-+           sta PD_ENERGY,x
+            bcc +
+            sta PD_ENERGY,x
++           rts
+
+; cast card #X from hand of Player (clobbers A,X,Y)
+CastPlayerCard:
+            ldy PlayerData+PD_HAND,x    ; Y=card#
+            ; move rest of hand X..SIZEOF_HAND-1
+-           cpx #SIZEOF_HAND-1          ; 0..SIZEOF_HAND-1
+            beq +
+            lda PlayerData+PD_HAND+1,x
+            sta PlayerData+PD_HAND,x
+            inx
+            bne -
++           lda #$FF
+            sta PlayerData+PD_HAND,x
+
+            lda Cards+CARD_LTSC,y
+            and #%00001111              ; LTSSCCCC
+            ldx #PlayerData
+            jsr DecreaseEnergy
+            ; TODO only if monster, unpack card into TD structure
+            ; TODO    select the card index on Table?
+            ; TODO    can you cancel putting a card down?
+            sty PlayerData+PD_TABLE+TD_CARD ; Y=card# ; TODO + table#*SIZEOF_TD(4)
+            lda Cards+CARD_ATDF,y       ; AAAADDDD : AAAA=Attack DDDD=Defense
+            lsr
+            lsr
+            lsr
+            lsr
+            sta PlayerData+PD_TABLE+TD_ATK
+            lda Cards+CARD_ATDF,y       ; AAAADDDD : AAAA=Attack DDDD=Defense
+            and #$0F
+            sta PlayerData+PD_TABLE+TD_DEF
+            lda #1                      ; status: 0=normal, 1=tapped
+            sta PlayerData+PD_TABLE+TD_STATUS
+            ; TODO 2) run on-play effect
             rts
 
 
@@ -948,22 +1018,26 @@ DrawPlayerHand:
             ldx #SIZEOF_HAND
             jsr SetMaxIndexX0
             .fixuphandptr=*+1
--           lda AIData+PD_HAND,x
+-           lda AIData+PD_HAND,x        ; SELF-MODIFIED
             cmp #$FF
-            beq +
-            tax
+            bne +
+            cpx #0                      ; no cards?
+            bne .spacehand
+            dec _CursorPos              ; fixup
+            bne .spacehand              ; always
++           tax
             .fixupdrawcard=*+1
-            jsr DrawPartialCardBack
+            jsr DrawPartialCardBack     ; SELF-MODIFIED
             lda #HAND_CARDWIDTH
             jsr AddToCursor
 +           jsr IncIndex
             bne -
-            ; fill remainder after cursor with spaces
+.spacehand: ; fill remainder after cursor with spaces
 -           lda _CursorPos
             cmp #38                     ; end for AI hand
-            beq .stealrts3
+            beq +
             cmp #<(23*40+38)            ; end for Player hand
-            beq .stealrts3
+            beq +
             inc _CursorPos
             lda #CHR_SPACE
             ldy #0
@@ -971,7 +1045,7 @@ DrawPlayerHand:
             ldy #40
             sta (_CursorPos),y
             bne -                       ; always
-
++           rts
 
 ;----------------------------------------------------------------------------
 ; CARD DRAWING
@@ -1118,7 +1192,7 @@ DrawPartialCardBack:
 DrawPartialCard:
             jsr DecorateFrame
             ; override color if cost too high
-            lda SCREEN+24*40            ; energy on screen
+            lda PlayerData+PD_ENERGY    ; $30..$39 energy
             ora #$B0                    ; $B0..$B9 (same as on card)
             cmp frame_COST              ; energy-cost
             bpl +                       ; 0+ OK
@@ -1166,12 +1240,12 @@ Cards:
     !byte 0 ; card# (offsets) should not be 0
     C_GOBLIN_LEADER=*-Cards
     !byte $C3, $32, N_GOBLIN_LEADER, E_ALL_GAIN11, G_LEGND_GOBLIN
-    !byte $01, $12, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $42, $12, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $43, $12, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $44, $12, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $45, $12, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $46, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $41, $12, N_WANNABE,       E_READY,      G_WANNABE
+    !byte $02, $12, N_WANNABE,       T_NONE,       G_3
+    !byte $03, $12, N_WANNABE,       T_NONE,       G_4
+    !byte $04, $12, N_WANNABE,       T_NONE,       G_5
+    !byte $05, $12, N_WANNABE,       T_NONE,       G_6
+    !byte $06, $12, N_WANNABE,       T_NONE,       G_7
     C_POLY_LEADER=*-Cards
     !byte $D3, $17, N_POLY_LEADER,   T_NONE,       G_LEGND_POLY
     !byte $51, $12, N_WANNABE,       T_NONE,       G_WANNABE
@@ -1211,37 +1285,39 @@ Decks:
 ; GLYPHS
 ;----------------------------------------------------------------------------
 
-; glyphs, 3 bytes per glyph = max 252/9 = 28 glyphs
+; glyphs, 3x3 bytes per glyph = max 252/9 = 28 glyphs
+; NOTE since 256 does not divide by 9, glyph offset modulo 256 (i.e. the low byte) can be used to index a hash of high bytes
+;      i.e. hash[low]=high which compresses really well since it just repeats 0 2 4 6 8 1 3 5 7
 GlyphData:
     G_LEGND_GOBLIN=*-GlyphData
     !byte 73,104,85
     !byte 215,215,117
     !byte 81,73,41
-    G_2=*=GlyphData
+    G_2=*-GlyphData
     !byte 73,104,85
     !byte 118,215,215
     !byte 40,58,87
-    G_3=*=GlyphData
+    G_3=*-GlyphData
     !byte 73,104,104
     !byte 85,108,108
     !byte 40,58,87
-    G_4=*=GlyphData
+    G_4=*-GlyphData
     !byte 104,104,85
     !byte 251,251,117
     !byte 87,58,29
-    G_5=*=GlyphData
+    G_5=*-GlyphData
     !byte 78,77,85
     !byte 87,87,62
     !byte 95,58,62
-    G_6=*=GlyphData
+    G_6=*-GlyphData
     !byte 32,85,73
     !byte 233,160,93
     !byte 95,105,32
-    G_7=*=GlyphData
+    G_7=*-GlyphData
     !byte 32,92,92
     !byte 92,102,163
     !byte 163,163,102
-    G_8=*=GlyphData
+    G_8=*-GlyphData
     !byte 32,30,32
     !byte 32,66,32
     !byte 233,226,223
@@ -1249,31 +1325,31 @@ GlyphData:
     !byte 206,160,205
     !byte 160,182,160
     !byte 192,159,192
-    G_10=*=GlyphData
+    G_10=*-GlyphData
     !byte 100,92,100
     !byte 101,32,103
     !byte 77,100,78
-    G_11=*=GlyphData
+    G_11=*-GlyphData
     !byte 32,107,104
     !byte 32,160,32
     !byte 32,160,32
-    G_12=*=GlyphData
+    G_12=*-GlyphData
     !byte 32,32,233
     !byte 32,78,32
     !byte 78,32,32
-    G_13=*=GlyphData
+    G_13=*-GlyphData
     !byte 225,229,97
     !byte 103,212,101
     !byte 103,212,101
-    G_14=*=GlyphData
+    G_14=*-GlyphData
     !byte 46,32,32
     !byte 160,46,46
     !byte 160,160,160
-    G_15=*=GlyphData
+    G_15=*-GlyphData
     !byte 85,64,73
     !byte 67,67,67
     !byte 74,64,75
-    G_16=*=GlyphData
+    G_16=*-GlyphData
     !byte 77,77,32
     !byte 233,236,223
     !byte 95,105,95
@@ -1281,31 +1357,31 @@ GlyphData:
     !byte 223,98,233
     !byte 160,160,160
     !byte 105,226,95
-    G_18=*=GlyphData
+    G_18=*-GlyphData
     !byte 92,92,92
     !byte 87,87,102
     !byte 226,75,102
-    G_19=*=GlyphData
+    G_19=*-GlyphData
     !byte 77,78,223
     !byte 78,78,78
     !byte 95,78,77
-    G_20=*=GlyphData
+    G_20=*-GlyphData
     !byte 83,32,83
     !byte 83,83,83
     !byte 32,83,32
-    G_21=*=GlyphData
+    G_21=*-GlyphData
     !byte 85,68,73
     !byte 71,87,72
     !byte 74,70,75
-    G_22=*=GlyphData
+    G_22=*-GlyphData
     !byte 1,2,3
     !byte 4,5,6
     !byte 7,8,78
-    G_23=*=GlyphData
+    G_23=*-GlyphData
     !byte 240,242,238
     !byte 235,219,243
     !byte 237,241,253
-    ; G_24=*=GlyphData
+    ; G_24=*-GlyphData
     ; !byte 95,95,32
     ; !byte 233,215,223
     ; !byte 95,206,160
@@ -1313,27 +1389,27 @@ GlyphData:
     !byte 255,251,252
     !byte 160,160,160
     !byte 124,226,126
-    G_26=*=GlyphData
+    G_26=*-GlyphData
     !byte 230,123,102
     !byte 230,102,230
     !byte 102,230,102
-    G_27=*=GlyphData
+    G_27=*-GlyphData
     !byte 32,85,73
     !byte 233,160,93
     !byte 95,105,32
-    G_28=*=GlyphData
+    G_28=*-GlyphData
     !byte 233,215,233
     !byte 233,160,160
     !byte 120,120,120
-    ; G_29=*=GlyphData
+    ; G_29=*-GlyphData
     ; !byte 32,32,32
     ; !byte 32,32,32
     ; !byte 32,32,32
-    ; G_30=*=GlyphData
+    ; G_30=*-GlyphData
     ; !byte 32,32,32
     ; !byte 32,32,32
     ; !byte 32,32,32
-    ; G_31=*=GlyphData
+    ; G_31=*-GlyphData
     ; !byte 32,32,32
     ; !byte 32,32,32
     ; !byte 32,32,32
@@ -1341,6 +1417,7 @@ GlyphData:
     !byte 127,98,126
     !byte 17,17,97
     !byte 124,251,78
+
 
 ;----------------------------------------------------------------------------
 ; TEXT
@@ -1360,8 +1437,10 @@ TextData:
     !byte M_FOREVER,M_SOAP,0
     N_WANNABE=*-TextData
     !byte M_SUIT,M_WANNABE,0
-    E_ALL_GAIN11=*-TextData
+    E_ALL_GAIN11=*-TextData ; All other cards of the same suit gain +1/+1
     !byte M_ALL,M_SUIT,M_GAIN11,0
+    E_READY=*-TextData ; Card has no summoning sickness
+    !byte M_READY,0
     T_YOUR_OPPONENT_IS=*-TextData
     !byte M_YOUR,M_OPPONENT,M_IS
     T_OPPONENT_NAME=*-TextData
@@ -1401,9 +1480,18 @@ opponent_name2:                    !scr "p",'.'+$80 ; SELF-MODIFIED
     M_END         =*-MacroData+1 : !scr "en",'d'+$80
     M_ALL         =*-MacroData+1 : !scr "al",'l'+$80
     M_GAIN11      =*-MacroData+1 : !scr "gain ",78,'1',83,'1'+$80
+    M_READY       =*-MacroData+1 : !scr "read",'y'+$80
 !if *-MacroData >= $FF { !error "Out of MacroData memory" }
 
 SIZEOF_TEXT=*-TextData
+
+AINames:
+    !scr "bd","jt","mg","rh"
+
+
+;----------------------------------------------------------------------------
+; FRAMES
+;----------------------------------------------------------------------------
 
 ; DrawF_Frame source data, use $60/96 to skip over a char
 FrameData:
@@ -1429,9 +1517,6 @@ frame_DEF: !byte $B0
     FRAME2_CARDBACK=*-FrameData         ; 5x2 bottom of card back
     !byte 194,102,102,102,194
     !byte 252,192,192,192,254
-
-AINames:
-    !scr "bd","jt","mg","rh"
 
 
 ;----------------------------------------------------------------------------
