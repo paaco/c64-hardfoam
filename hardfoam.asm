@@ -52,6 +52,7 @@ CHR_NO_PLAY=86 ; cross
 CHR_ENDTURN=62 ; >
 ;
 HAND_CARDWIDTH=4
+TABLE_CARDWIDTH=5
 
 !addr SCREEN=$0400
 
@@ -76,22 +77,23 @@ HAND_CARDWIDTH=4
     ; fixed '/' character in between
     PD_MAXENERGY=3  ; $30 .. $39
     PD_REMAIN=4     ; DECKSIZE-1 .. 0
-    PD_HAND=5       ; 7 bytes (card#),$FF=no card
-    SIZEOF_HAND=6   ; max 6 cards
-    PD_TABLE=12     ; 20 bytes 5*4 bytes (card#,atd,def,status)
+    PD_HAND=5       ; 7 bytes card# or $FF=no card (left filled)
+    SIZEOF_HAND=6   ; max #cards in hand
+    PD_TABLE=12     ; 20 bytes 5*4 bytes (card#,atk,def,status)
       TD_CARD=0     ; card# $FF=no card
       TD_ATK=1      ; attack
       TD_DEF=2      ; defense
       TD_STATUS=3   ; status: 0=normal, 1=tapped
       SIZEOF_TD=4
+    SIZEOF_TABLE=5  ; max #cards on table
     PD_DECK=32      ; 32 bytes (card#)
 SIZEOF_PD=64
 !addr AIData=$10+SIZEOF_PD
 !addr Index=$90     ; loop/selection index
 !addr MaxIndex=$91  ; <MaxIndex
 !addr SelectorIndex=$92 ; Index used for DrawCardSelect/ClearCardSelect
-;!addr CardIdx=$92
-;!addr TableIdx=$93
+!addr SelectorIndexBackup=$93
+!addr TableIdx=$94
 ; Draws rectangle 5x5 (upto 8x6) via DrawF function (clobbers A,Y)
 !addr _Draw=$E0     ; $E0-$F6 is block drawing routine
 
@@ -786,6 +788,16 @@ Start:
             ; restore energy for player
             ldx #PlayerData
             jsr Energize
+            jsr Energize
+            jsr Energize
+            jsr Energize
+            jsr Energize
+            jsr Energize
+            jsr Energize
+            jsr Energize
+            jsr Energize
+            jsr Energize
+            jsr Energize
 
             jsr DrawCounters
 
@@ -796,6 +808,7 @@ Start:
             ; select from hand
 --          lda #0                      ; 0..SIZEOF_HAND-1=card, SIZEOF_HAND=END
             sta SelectorIndex
+            sta SelectorIndexBackup
 
             ; draw selected card for player (or card back)
 .redraw:    ldy #<(SCREEN+15*40)
@@ -803,7 +816,12 @@ Start:
             jsr SetCursor
             jsr ClearLowerLines         ; clears text area
             ldy SelectorIndex
-            ldx PlayerData+PD_HAND,y
+            cpy #SIZEOF_HAND+1
+            bcc +
+            ldy SelectorIndexBackup
+            sty SelectorIndex
++           ldx PlayerData+PD_HAND,y
+            sty SelectorIndexBackup
             cpx #$FF
             bne +
             jsr DrawCardBack
@@ -860,6 +878,7 @@ Start:
             dec SelectorIndex
 +           cmp #%11101111              ; FIRE
             bne +
+
             ; place card on table if possible
             ldx SelectorIndex
             lda #CHR_PLAY
@@ -878,7 +897,7 @@ Start:
             lda #>(SCREEN+15*40+(40-24)/2)
             jsr SetCursor
             ldy #PlayerData+PD_TABLE
-            jsr DrawTableCard
+            jsr DrawTable
 
 +           jmp .redraw
 
@@ -1047,6 +1066,22 @@ DrawPlayerHand:
             bne -                       ; always
 +           rts
 
+; draw table in Y at Cursor (clobbers A,X,Y,TableIdx)
+DrawTable:
+            sty TableIdx                ; $1C or $5C
+            jsr DrawTableCard
+            lda #TABLE_CARDWIDTH+1
+            jsr AddToCursor
+            lda TableIdx
+            clc
+            adc #SIZEOF_TD
+            tay
+            and #$3F                    ; extract offset
+            cmp #PlayerData+PD_TABLE+SIZEOF_TABLE*SIZEOF_TD
+            bne DrawTable
+            rts
+
+
 ;----------------------------------------------------------------------------
 ; CARD DRAWING
 ;----------------------------------------------------------------------------
@@ -1055,7 +1090,7 @@ DrawPlayerHand:
 ; - draws status border, no decoration and highlighted attack/defense
 DrawTableCard:
             ldx TD_CARD,y
-            cmp #$FF
+            cpx #$FF
             bne +
             ldx #CFG_CLEARFRAME         ; clear card
             jmp Draw
@@ -1179,6 +1214,8 @@ DrawCardBack:
             ldx #CFG_FRAME
             jmp Draw
 
+            !align $0F,0,0 ; force DrawPartialCard* in same
+
 ; draws top 2-lines of card background at Cursor (clobbers A,X,Y)
 DrawPartialCardBack:
             lda #COL_CARDBACK
@@ -1245,7 +1282,7 @@ Cards:
     !byte $03, $12, N_WANNABE,       T_NONE,       G_4
     !byte $04, $12, N_WANNABE,       T_NONE,       G_5
     !byte $05, $12, N_WANNABE,       T_NONE,       G_6
-    !byte $06, $12, N_WANNABE,       T_NONE,       G_7
+    !byte $45, $12, N_WANNABE,       T_NONE,       G_7
     C_POLY_LEADER=*-Cards
     !byte $D3, $17, N_POLY_LEADER,   T_NONE,       G_LEGND_POLY
     !byte $51, $12, N_WANNABE,       T_NONE,       G_WANNABE
