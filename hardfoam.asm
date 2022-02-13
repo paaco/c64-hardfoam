@@ -93,7 +93,9 @@ SIZEOF_PD=64
 !addr MaxIndex=$91  ; <MaxIndex
 !addr SelectorIndex=$92 ; Index used for DrawCardSelect/ClearCardSelect
 !addr SelectorIndexBackup=$93
-!addr TableIdx=$94
+!addr TableIdx=$94  ; loop index for DrawTable
+!addr InsertingPos=$95 ; place to insert card during DrawTable ($FF=disable)
+!addr InsertingCard=$96 ; card to show during DrawTable
 ; Draws rectangle 5x5 (upto 8x6) via DrawF function (clobbers A,Y)
 !addr _Draw=$E0     ; $E0-$F6 is block drawing routine
 
@@ -867,6 +869,7 @@ Start:
 ++          ldy HandSelectorOffsets,x
             jsr DrawF_ASuitCol
 
+;!if DEBUG=0 {
             jsr DebounceJoystick
 -           jsr ReadJoystick            ; 111FRLDU
             beq -
@@ -878,14 +881,13 @@ Start:
             dec SelectorIndex
 +           cmp #%11101111              ; FIRE
             bne +
-
-            ; place card on table if possible
+            ; test if current card can be cast
             ldx SelectorIndex
             lda #CHR_PLAY
             ldy HandSelectorOffsets,x
             cmp (_CursorPos),y
             bne +                       ; not possible
-
+;}
             ; cast card X from hand
             jsr CastPlayerCard
 
@@ -1066,9 +1068,18 @@ DrawPlayerHand:
             bne -                       ; always
 +           rts
 
-; draw table in Y at Cursor (clobbers A,X,Y,TableIdx)
+; draw table in Y at Cursor (clobbers A,X,Y,TableIdx,Index)
 DrawTable:
-            sty TableIdx                ; $1C or $5C
+            ldx #$FF                    ; hide inserting by default
+; draw table in Y at Cursor inserting card A at position X (clobbers A,X,Y,TableIdx,Index)
+DrawTableInserting:
+            stx InsertingPos
+            sta InsertingCard
+.drawtable: ldx #SIZEOF_TABLE
+            jsr SetMaxIndexX0
+-           sty TableIdx                ; $1C or $5C
+            cpx InsertingPos
+            beq .drawinsert
             jsr DrawTableCard
             lda #TABLE_CARDWIDTH+1
             jsr AddToCursor
@@ -1076,10 +1087,16 @@ DrawTable:
             clc
             adc #SIZEOF_TD
             tay
-            and #$3F                    ; extract offset
-            cmp #PlayerData+PD_TABLE+SIZEOF_TABLE*SIZEOF_TD
-            bne DrawTable
+--          jsr IncIndex
+            bne -
             rts
+.drawinsert:
+            ldx InsertingCard
+            jsr DrawCard
+            lda #TABLE_CARDWIDTH+1
+            jsr AddToCursor
+            ldy TableIdx
+            bne --                      ; always
 
 
 ;----------------------------------------------------------------------------
