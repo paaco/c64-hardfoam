@@ -78,17 +78,17 @@ TABLE_CARDWIDTH=5
     PD_MAXENERGY=3  ; $30 .. $39
     PD_REMAIN=4     ; DECKSIZE-1 .. 0
     PD_HAND=5       ; 7 bytes card# or $FF=no card (left filled)
-    SIZEOF_HAND=6   ; max #cards in hand
+    MAX_HAND=6      ; max #cards in hand
     PD_TABLE=12     ; 20 bytes 5*4 bytes (card#,atk,def,status)
       TD_CARD=0     ; card# $FF=no card
       TD_ATK=1      ; attack
       TD_DEF=2      ; defense
       TD_STATUS=3   ; status: 0=normal, 1=tapped
       SIZEOF_TD=4
-    SIZEOF_TABLE=5  ; max #cards on table
+    MAX_TABLE=5     ; max #cards on table
     PD_DECK=32      ; 32 bytes (card#)
 SIZEOF_PD=64
-!addr AIData=$10+SIZEOF_PD
+!addr AIData=$50
 !addr Index=$90     ; loop/selection index
 !addr MaxIndex=$91  ; <MaxIndex
 !addr SelectorIndex=$92 ; Index used for DrawCardSelect/ClearCardSelect
@@ -276,7 +276,7 @@ ClearAll: ; 20 bytes
             bne -
             rts
 
-; draws energy, deck counters and health bards (clobbers A,X,Y,Tmp1)
+; draws energy, deck counters and health bars (clobbers A,X,Y,Tmp1)
 DrawCounters:
             ; energy
             ldx #2
@@ -808,7 +808,7 @@ Start:
             ; TODO: if there is none, select END symbol
 
             ; select from hand
---          lda #0                      ; 0..SIZEOF_HAND-1=card, SIZEOF_HAND=END
+--          lda #0                      ; 0..MAX_HAND-1=card, MAX_HAND=END
             sta SelectorIndex
             sta SelectorIndexBackup
 
@@ -818,7 +818,7 @@ Start:
             jsr SetCursor
             jsr ClearLowerLines         ; clears text area
             ldy SelectorIndex
-            cpy #SIZEOF_HAND+1
+            cpy #MAX_HAND+1
             bcc +
             ldy SelectorIndexBackup
             sty SelectorIndex
@@ -850,7 +850,7 @@ Start:
             lda #>(SCREEN+23*40)
             jsr SetCursor
             ldx SelectorIndex
-            cpx #SIZEOF_HAND
+            cpx #MAX_HAND
             bne +
             lda #CHR_ENDTURN
             bne ++                      ; always
@@ -904,7 +904,7 @@ Start:
 +           jmp .redraw
 
 HandSelectorOffsets:
-    !for i,0,6 { !byte 10+HAND_CARDWIDTH*i }
+    !for i,0,MAX_HAND { !byte 10 + i * HAND_CARDWIDTH }
 
 
 ;----------------------------------------------------------------------------
@@ -913,22 +913,21 @@ HandSelectorOffsets:
 
 ; pull a card in hand for Player (clobbers A,X) returns 0 when no cards were left
 ; if there's no room in hand, the card is lost
-; TODO can you make this generic again when using also Y
 PullPlayerDeckCard:
             lda PlayerData+PD_REMAIN
             beq +                       ; no cards left
             dec PlayerData+PD_REMAIN
             ; is hand full?
-            lda PlayerData+PD_HAND+SIZEOF_HAND-1
+            lda PlayerData+PD_HAND+MAX_HAND-1
             cmp #$FF
-            bne +                       ; hand full (A can be anything)
-            ; move cards
-            ldx #SIZEOF_HAND-2
+            bne +                       ; hand full (A will be <>0 because card# is never 0)
+            ; move cards to make room at start of hand
+            ldx #MAX_HAND-2
 -           lda PlayerData+PD_HAND,x
             sta PlayerData+PD_HAND+1,x
             dex
             bpl -
-            ; store card
+            ; store top card of deck at start of hand
             ldx PlayerData+PD_REMAIN
             lda PlayerData+PD_DECK,x
             sta PlayerData+PD_HAND      ; card# is never 0 so A<>0
@@ -938,22 +937,22 @@ PullPlayerDeckCard:
 ; if there's no room in hand, the card is lost
 PullAIDeckCard:
             lda AIData+PD_REMAIN
-            beq +                       ; no cards left
+            beq +                       ; no cards left (A will be 0)
             dec AIData+PD_REMAIN
             ; is hand full?
-            lda AIData+PD_HAND+SIZEOF_HAND-1
+            lda AIData+PD_HAND+MAX_HAND-1
             cmp #$FF
-            bne +                       ; hand full (A can be anything)
-            ; move cards
-            ldx #SIZEOF_HAND-2
+            bne +                       ; hand full (A will be <>0 because card# is never 0)
+            ; move cards to make room at start of hand
+            ldx #MAX_HAND-2
 -           lda AIData+PD_HAND,x
             sta AIData+PD_HAND+1,x
             dex
             bpl -
-            ; store card
+            ; store top card of deck at start of hand
             ldx AIData+PD_REMAIN
             lda AIData+PD_DECK,x
-            sta AIData+PD_HAND      ; card# is never 0 so A<>0
+            sta AIData+PD_HAND          ; card# is never 0 so A<>0
 +           rts
 
 ; increase max energy and replenish energy of Player in X (clobbers Y)
@@ -978,9 +977,9 @@ DecreaseEnergy:
 
 ; cast card #X from hand of Player (clobbers A,X,Y)
 CastPlayerCard:
-            ldy PlayerData+PD_HAND,x    ; Y=card#
-            ; move rest of hand X..SIZEOF_HAND-1
--           cpx #SIZEOF_HAND-1          ; 0..SIZEOF_HAND-1
+            ldy PlayerData+PD_HAND,x    ; store card#
+            ; move rest of hand X..MAX_HAND-1
+-           cpx #MAX_HAND-1             ; 0..MAX_HAND-1
             beq +
             lda PlayerData+PD_HAND+1,x
             sta PlayerData+PD_HAND,x
@@ -993,23 +992,52 @@ CastPlayerCard:
             and #%00001111              ; LTSSCCCC
             ldx #PlayerData
             jsr DecreaseEnergy
-            ; TODO only if monster, unpack card into TD structure
-            ; TODO    select the card index on Table?
-            ; TODO    can you cancel putting a card down?
-            sty PlayerData+PD_TABLE+TD_CARD ; Y=card# ; TODO + table#*SIZEOF_TD(4)
+            lda Cards+CARD_LTSC,y
+            and #%01000000              ; LTSSCCCC T=Type(0=Spell/1=Monster)
+            beq .spell
+            ; put monster card on table
+            ; TODO select the card index on Table? / can you cancel putting a card down?
+            txa                         ; Player
+            ldx #0                      ; card index on table
+            jsr PutCardOnTable
+.spell:     ; TODO 2) run on-play effect
+            rts
+
+; Y=card#, A=Player X=index on table (0..MAX_TABLE-1) (clobbers A,X,Tmp1)
+; Note that this blindly assumes there's room on the table!
+PutCardOnTable:
+            pha
+            clc
+            adc TableCardOffsets,x      ; => A is index to card on Table (AI/PlayerData+PD_TABLE+X*SIZEOF_TD)
+            sta Tmp1
+            pla
+            ; make room for card on table
+            ;clc
+            adc #PD_TABLE+(MAX_TABLE-1)*SIZEOF_TD-1 ; last byte of 2nd last card
+            tax
+-           lda TD_CARD,x
+            sta TD_CARD+SIZEOF_TD,x
+            dex
+            cpx Tmp1
+            bpl -
+            inx                         ; fixup (X is now Tmp1)
+            ; place card
+            sty TD_CARD,x
             lda Cards+CARD_ATDF,y       ; AAAADDDD : AAAA=Attack DDDD=Defense
             lsr
             lsr
             lsr
             lsr
-            sta PlayerData+PD_TABLE+TD_ATK
+            sta TD_ATK,x
             lda Cards+CARD_ATDF,y       ; AAAADDDD : AAAA=Attack DDDD=Defense
             and #$0F
-            sta PlayerData+PD_TABLE+TD_DEF
+            sta TD_DEF,x
             lda #1                      ; status: 0=normal, 1=tapped
-            sta PlayerData+PD_TABLE+TD_STATUS
-            ; TODO 2) run on-play effect
+            sta TD_STATUS,x
             rts
+
+TableCardOffsets:
+            !for i,0,MAX_TABLE-1 { !byte PD_TABLE + i * SIZEOF_TD }
 
 
 ;----------------------------------------------------------------------------
@@ -1036,7 +1064,7 @@ DrawPlayerHand:
             lda #>(SCREEN+23*40+8)
 .drawhand:
             jsr SetCursor
-            ldx #SIZEOF_HAND
+            ldx #MAX_HAND
             jsr SetMaxIndexX0
             .fixuphandptr=*+1
 -           lda AIData+PD_HAND,x        ; SELF-MODIFIED
@@ -1075,7 +1103,7 @@ DrawTable:
 DrawTableInserting:
             stx InsertingPos
             sta InsertingCard
-.drawtable: ldx #SIZEOF_TABLE
+.drawtable: ldx #MAX_TABLE
             jsr SetMaxIndexX0
 -           sty TableIdx                ; $1C or $5C
             cpx InsertingPos
@@ -1288,18 +1316,18 @@ CARD_ATDF=1         ; 1 byte AAAADDDD : AAAA=Attack DDDD=Defense
 CARD_NAME=2         ; 1 byte Name TextPtr
 CARD_EFFECT=3       ; 1 byte Effect TextPtr (also used to perform effect)
 CARD_GLYPH=4        ; 1 byte GlyphPtr
-SIZEOF_CARD=5
+SIZEOF_CARD=5       ; 256/5 => 50 cards max (0 and $FF are used for other purposes)
 
 Cards:
     !byte 0 ; card# (offsets) should not be 0
     C_GOBLIN_LEADER=*-Cards
     !byte $C3, $32, N_GOBLIN_LEADER, E_ALL_GAIN11, G_LEGND_GOBLIN
-    !byte $41, $12, N_WANNABE,       E_READY,      G_WANNABE
+    !byte $41, $11, N_WANNABE,       E_READY,      G_WANNABE
     !byte $02, $12, N_WANNABE,       T_NONE,       G_3
-    !byte $03, $12, N_WANNABE,       T_NONE,       G_4
-    !byte $04, $12, N_WANNABE,       T_NONE,       G_5
-    !byte $05, $12, N_WANNABE,       T_NONE,       G_6
-    !byte $45, $12, N_WANNABE,       T_NONE,       G_7
+    !byte $03, $13, N_WANNABE,       T_NONE,       G_4
+    !byte $41, $14, N_WANNABE,       T_NONE,       G_5
+    !byte $02, $15, N_WANNABE,       T_NONE,       G_6
+    !byte $03, $16, N_WANNABE,       T_NONE,       G_7
     C_POLY_LEADER=*-Cards
     !byte $D3, $17, N_POLY_LEADER,   T_NONE,       G_LEGND_POLY
     !byte $51, $12, N_WANNABE,       T_NONE,       G_WANNABE
@@ -1324,8 +1352,7 @@ Cards:
     !byte $74, $12, N_WANNABE,       T_NONE,       G_WANNABE
     !byte $75, $12, N_WANNABE,       T_NONE,       G_WANNABE
     !byte $76, $12, N_WANNABE,       T_NONE,       G_WANNABE
-SIZEOF_CARDS=*-Cards
-NUM_CARDS=SIZEOF_CARDS/5
+NUM_CARDS=(*-Cards)/5
 
 ; default decks (8 bytes each, starting with legendary)
 Decks:
