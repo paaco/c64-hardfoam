@@ -1,9 +1,7 @@
 ; HARD FOAM - a 4K compressed card game
 ; Developed for the https://ausretrogamer.com/2022-reset64-4kb-craptastic-game-competition
 
-; TODO: turn: play cards from your hand
 ; TODO: turn: attack with table cards (pick your own order, attack not required)
-; TODO: end turn
 ; TODO: AI turn: take card; if necessary discard the (first)) most expensive one
 ; TODO: AI turn: while possible, play random cards from hand
 ; TODO: AI turn: with each table card, attack random table card
@@ -83,7 +81,9 @@ TABLE_CARDWIDTH=5
       TD_CARD=0     ; card# $FF=no card
       TD_ATK=1      ; attack
       TD_DEF=2      ; defense
-      TD_STATUS=3   ; status: 0=normal, 1=tapped
+      TD_STATUS=3   ; status bits: 1=tapped, 2=shielded
+      STATUS_TAPPED=1
+      STATUS_SHIELDED=2
       SIZEOF_TD=4
     MAX_TABLE=5     ; max #cards on table
     PD_DECK=32      ; 32 bytes (card#)
@@ -98,6 +98,18 @@ SIZEOF_PD=64
 !addr InsertingCard=$96 ; card to show during DrawTable
 ; Draws rectangle 5x5 (upto 8x6) via DrawF function (clobbers A,Y)
 !addr _Draw=$E0     ; $E0-$F6 is block drawing routine
+
+; macro to wait for specific raster line to avoid flickering (clobbers A)
+!macro WaitVBL .LINE {
+            lda #.LINE
+.loop       cmp $D012
+            !if DEBUG=0 {
+                bne .loop
+            } else {
+                nop
+                nop
+            }
+}
 
 ;############################################################################
 
@@ -787,20 +799,13 @@ Start:
             jsr SetCursorDrawCardBack
             jsr DrawAIHand
 
+NextRound:
+            ; pull next card
+            jsr PullPlayerDeckCard
+
             ; restore energy for player
             ldx #PlayerData
             jsr Energize
-            jsr Energize
-            jsr Energize
-            jsr Energize
-            jsr Energize
-            jsr Energize
-            jsr Energize
-            jsr Energize
-            jsr Energize
-            jsr Energize
-            jsr Energize
-
             jsr DrawCounters
 
             ; TODO: start of turn: select first possible hand card
@@ -808,7 +813,7 @@ Start:
             ; TODO: if there is none, select END symbol
 
             ; select from hand
---          lda #0                      ; 0..MAX_HAND-1=card, MAX_HAND=END
+            lda #0                      ; 0..MAX_HAND-1=card, MAX_HAND=END
             sta SelectorIndex
             sta SelectorIndexBackup
 
@@ -816,6 +821,7 @@ Start:
 .redraw:    ldy #<(SCREEN+15*40)
             lda #>(SCREEN+15*40)
             jsr SetCursor
+            +WaitVBL($30)
             jsr ClearLowerLines         ; clears text area
             ldy SelectorIndex
             cpy #MAX_HAND+1
@@ -881,10 +887,21 @@ Start:
             dec SelectorIndex
 +           cmp #%11101111              ; FIRE
             bne +
-            ; test if current card can be cast
+
             ldx SelectorIndex
-            lda #CHR_PLAY
             ldy HandSelectorOffsets,x
+            ; end of turn?
+            lda #CHR_ENDTURN
+            cmp (_CursorPos),y
+            bne +                       ; nope
+            ; end of turn
+            ldy #PlayerData+PD_TABLE
+            jsr UntapTable
+            jsr DrawPlayerTable
+            jmp NextRound
+
+            ; play card?
++           lda #CHR_PLAY
             cmp (_CursorPos),y
             bne +                       ; not possible
 ;}
@@ -894,12 +911,7 @@ Start:
             ; redraw screen
             jsr DrawCounters
             jsr DrawPlayerHand
-            ; draw card(s) on table
-            ldy #<(SCREEN+15*40+(40-24)/2)
-            lda #>(SCREEN+15*40+(40-24)/2)
-            jsr SetCursor
-            ldy #PlayerData+PD_TABLE
-            jsr DrawTable
+            jsr DrawPlayerTable
 
 +           jmp .redraw
 
@@ -997,13 +1009,13 @@ CastPlayerCard:
             beq .spell
             ; put monster card on table
             ; TODO select the card index on Table? / can you cancel putting a card down?
-            txa                         ; Player
+            lda #PlayerData+PD_TABLE
             ldx #0                      ; card index on table
             jsr PutCardOnTable
 .spell:     ; TODO 2) run on-play effect
             rts
 
-; Y=card#, A=Player X=index on table (0..MAX_TABLE-1) (clobbers A,X,Tmp1)
+; put card Y on Table A at index X (0..MAX_TABLE-1) (clobbers A,X,Tmp1)
 ; Note that this blindly assumes there's room on the table!
 PutCardOnTable:
             pha
@@ -1013,7 +1025,7 @@ PutCardOnTable:
             pla
             ; make room for card on table
             ;clc
-            adc #PD_TABLE+(MAX_TABLE-1)*SIZEOF_TD-1 ; last byte of 2nd last card
+            adc #(MAX_TABLE-1)*SIZEOF_TD-1 ; last byte of 2nd last card
             tax
 -           lda TD_CARD,x
             sta TD_CARD+SIZEOF_TD,x
@@ -1032,12 +1044,30 @@ PutCardOnTable:
             lda Cards+CARD_ATDF,y       ; AAAADDDD : AAAA=Attack DDDD=Defense
             and #$0F
             sta TD_DEF,x
-            lda #1                      ; status: 0=normal, 1=tapped
-            sta TD_STATUS,x
+            lda #STATUS_TAPPED
+            sta TD_STATUS,x             ; status bits: 1=tapped, 2=shielded
             rts
 
 TableCardOffsets:
-            !for i,0,MAX_TABLE-1 { !byte PD_TABLE + i * SIZEOF_TD }
+            !for i,0,MAX_TABLE-1 { !byte i * SIZEOF_TD }
+
+; untap all cards on table in Y (clobbers A,X,Y)
+UntapTable:
+            ldx #0
+-           lda TD_CARD,y
+            cmp #$FF
+            beq +
+            lda TD_STATUS,y
+            and #255-STATUS_TAPPED
+            sta TD_STATUS,y
++           tya
+            clc
+            adc #SIZEOF_TD
+            tay
+            inx
+            cpx #MAX_TABLE
+            bne -
+            rts
 
 
 ;----------------------------------------------------------------------------
@@ -1096,14 +1126,22 @@ DrawPlayerHand:
             bne -                       ; always
 +           rts
 
+; draw lower table
+DrawPlayerTable:
+            ldy #<(SCREEN+15*40+(40-24)/2)
+            lda #>(SCREEN+15*40+(40-24)/2)
+            jsr SetCursor
+            ldy #PlayerData+PD_TABLE
+            bne .drawtable              ; always
+
 ; draw table in Y at Cursor (clobbers A,X,Y,TableIdx,Index)
-DrawTable:
+.drawtable:
             ldx #$FF                    ; hide inserting by default
 ; draw table in Y at Cursor inserting card A at position X (clobbers A,X,Y,TableIdx,Index)
 DrawTableInserting:
             stx InsertingPos
             sta InsertingCard
-.drawtable: ldx #MAX_TABLE
+            ldx #MAX_TABLE
             jsr SetMaxIndexX0
 -           sty TableIdx                ; $1C or $5C
             cpx InsertingPos
@@ -1139,7 +1177,7 @@ DrawTableCard:
             bne +
             ldx #CFG_CLEARFRAME         ; clear card
             jmp Draw
-+           jsr DecorateFrame
++           jsr DecorateBottomFrame     ; set (default) atk/def values
             ; hide type/cost
             lda #79                     ; left corner
             sta frame_TYPE
@@ -1148,7 +1186,8 @@ DrawTableCard:
             ; override colors if tapped
             lda #$85                    ; STA
             sta .fixupcolorwrite        ; enable color write
-            lda TD_STATUS,y             ; 0=normal, 1=tapped
+            lda TD_STATUS,y             ; status bits: 1=tapped, 2=shielded
+            and #STATUS_TAPPED
             beq +
             lda #COL_DISABLED
             sta CharCol
@@ -1318,16 +1357,18 @@ CARD_EFFECT=3       ; 1 byte Effect TextPtr (also used to perform effect)
 CARD_GLYPH=4        ; 1 byte GlyphPtr
 SIZEOF_CARD=5       ; 256/5 => 50 cards max (0 and $FF are used for other purposes)
 
+; TODO add Sen'jin Shieldmasta ("Taz'dingo") 4 3/5
 Cards:
     !byte 0 ; card# (offsets) should not be 0
     C_GOBLIN_LEADER=*-Cards
     !byte $C3, $32, N_GOBLIN_LEADER, E_ALL_GAIN11, G_LEGND_GOBLIN
-    !byte $41, $11, N_WANNABE,       E_READY,      G_WANNABE
+    !byte $41, $12, N_WANNABE,       E_READY,      G_WANNABE
     !byte $02, $12, N_WANNABE,       T_NONE,       G_3
     !byte $03, $13, N_WANNABE,       T_NONE,       G_4
     !byte $41, $14, N_WANNABE,       T_NONE,       G_5
     !byte $02, $15, N_WANNABE,       T_NONE,       G_6
     !byte $03, $16, N_WANNABE,       T_NONE,       G_7
+    !byte $03, $17, N_WANNABE,       T_NONE,       G_8
     C_POLY_LEADER=*-Cards
     !byte $D3, $17, N_POLY_LEADER,   T_NONE,       G_LEGND_POLY
     !byte $51, $12, N_WANNABE,       T_NONE,       G_WANNABE
@@ -1336,6 +1377,7 @@ Cards:
     !byte $54, $12, N_WANNABE,       T_NONE,       G_WANNABE
     !byte $55, $12, N_WANNABE,       T_NONE,       G_WANNABE
     !byte $56, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $57, $12, N_WANNABE,       T_NONE,       G_WANNABE
     C_CANDY_LEADER=*-Cards
     !byte $E0, $00, N_CANDY_LEADER,  T_NONE,       G_LEGND_CANDY
     !byte $61, $12, N_WANNABE,       T_NONE,       G_WANNABE
@@ -1344,6 +1386,7 @@ Cards:
     !byte $64, $12, N_WANNABE,       T_NONE,       G_WANNABE
     !byte $65, $12, N_WANNABE,       T_NONE,       G_WANNABE
     !byte $66, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $67, $12, N_WANNABE,       T_NONE,       G_WANNABE
     C_SOAP_LEADER=*-Cards
     !byte $F0, $00, N_SOAP_LEADER,   T_NONE,       G_LEGND_SOAP
     !byte $71, $12, N_WANNABE,       T_NONE,       G_WANNABE
@@ -1352,6 +1395,7 @@ Cards:
     !byte $74, $12, N_WANNABE,       T_NONE,       G_WANNABE
     !byte $75, $12, N_WANNABE,       T_NONE,       G_WANNABE
     !byte $76, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $77, $12, N_WANNABE,       T_NONE,       G_WANNABE
 NUM_CARDS=(*-Cards)/5
 
 ; default decks (8 bytes each, starting with legendary)
@@ -1561,7 +1605,7 @@ opponent_name2:                    !scr "p",'.'+$80 ; SELF-MODIFIED
     M_END         =*-MacroData+1 : !scr "en",'d'+$80
     M_ALL         =*-MacroData+1 : !scr "al",'l'+$80
     M_GAIN11      =*-MacroData+1 : !scr "gain ",78,'1',83,'1'+$80
-    M_READY       =*-MacroData+1 : !scr "read",'y'+$80
+    M_READY       =*-MacroData+1 : !scr "ready",'.'+$80
 !if *-MacroData >= $FF { !error "Out of MacroData memory" }
 
 SIZEOF_TEXT=*-TextData
@@ -1598,6 +1642,13 @@ frame_DEF: !byte $B0
     FRAME2_CARDBACK=*-FrameData         ; 5x2 bottom of card back
     !byte 194,102,102,102,194
     !byte 252,192,192,192,254
+    FRAME_SHIELDED=*-FrameData          ; 5x6 shielded overlay
+    !byte 96,42,42,42,96
+    !byte 42,96,96,96,42
+    !byte 42,96,96,96,42
+    !byte 42,96,96,96,42
+    !byte 96,42,42,42,96
+    !byte 96,96,96,96,96
 
 
 ;----------------------------------------------------------------------------
