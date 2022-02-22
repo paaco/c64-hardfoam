@@ -39,7 +39,7 @@ COL_HEALTH_OFF=BLACK
 COL_CARDBACK=ORANGE
 COL_PLAIN=LIGHT_GREY
 COL_LEGEND=YELLOW
-COL_DISABLED=PURPLE
+COL_DISABLED=LIGHT_BLUE
 COL_SELECTED=WHITE
 COL_HIGHER=GREEN
 COL_LOWER=LIGHT_RED
@@ -51,6 +51,8 @@ CHR_ENDTURN=62 ; >
 ;
 HAND_CARDWIDTH=4
 TABLE_CARDWIDTH=5
+; Effects
+EFFECT_ONPLAY=1                         ; called (once) when spell card is played or moster card has been put on table
 
 !addr SCREEN=$0400
 
@@ -96,6 +98,12 @@ SIZEOF_PD=64
 !addr TableIdx=$94  ; loop index for DrawTable
 !addr InsertingPos=$95 ; place to insert card during DrawTable ($FF=disable)
 !addr InsertingCard=$96 ; card to show during DrawTable
+; Effect interface
+!addr EfCard=$97    ; card# that owns the effect
+!addr EfSelf=$98    ; card on table (0 in case of spell)
+!addr EfTable=$99   ; player table
+!addr EfTable2=$9A  ; opponent table
+!addr EfTarget=$9B  ; target card on table (0 in case not necessary)
 ; Draws rectangle 5x5 (upto 8x6) via DrawF function (clobbers A,Y)
 !addr _Draw=$E0     ; $E0-$F6 is block drawing routine
 
@@ -906,6 +914,7 @@ NextRound:
             bne +                       ; not possible
 ;}
             ; cast card X from hand
+            ldx #3 ; DEBUG WANNABE
             jsr CastPlayerCard
 
             ; redraw screen
@@ -989,17 +998,20 @@ DecreaseEnergy:
 
 ; cast card #X from hand of Player (clobbers A,X,Y)
 CastPlayerCard:
-            ldy PlayerData+PD_HAND,x    ; store card#
-            ; move rest of hand X..MAX_HAND-1
+            ldy PlayerData+PD_HAND,x    ; card# in Y
+            ; remove card by shifting cards X..MAX_HAND-1 left
 -           cpx #MAX_HAND-1             ; 0..MAX_HAND-1
             beq +
             lda PlayerData+PD_HAND+1,x
             sta PlayerData+PD_HAND,x
             inx
-            bne -
+            bne -                       ; "always"
 +           lda #$FF
-            sta PlayerData+PD_HAND,x
+            sta PlayerData+PD_HAND,x    ; wipe last card
+            ; TODO howto "uncast"?
 
+            lda #AIData+PD_TABLE
+            sta EfTable2
             lda Cards+CARD_LTSC,y
             and #%00001111              ; LTSSCCCC
             ldx #PlayerData
@@ -1010,10 +1022,17 @@ CastPlayerCard:
             ; put monster card on table
             ; TODO select the card index on Table? / can you cancel putting a card down?
             lda #PlayerData+PD_TABLE
+            sta EfTable
             ldx #0                      ; card index on table
             jsr PutCardOnTable
-.spell:     ; TODO 2) run on-play effect
-            rts
+            ; monster: Y=card# / X=PlayerData+PD_TABLE+card#*SIZEOF_TD("self") / A=1 (STATUS_TAPPED)
+            stx EfSelf
+            lda #EFFECT_ONPLAY
+            jmp CastEffect
+.spell:     ; spell:   Y=card# / X=PlayerData / A=0
+            sta EfSelf
+            lda #EFFECT_ONPLAY
+            jmp CastEffect
 
 ; put card Y on Table A at index X (0..MAX_TABLE-1) (clobbers A,X,Tmp1)
 ; Note that this blindly assumes there's room on the table!
@@ -1067,6 +1086,41 @@ UntapTable:
             inx
             cpx #MAX_TABLE
             bne -
+            rts
+
+
+;----------------------------------------------------------------------------
+; EFFECTS
+;----------------------------------------------------------------------------
+; Effect interface
+; !addr EfCard=$97     ; card# that owns the effect
+; !addr EfSelf=$98     ; card on table (0 in case of spell)
+; !addr EfTable=$99    ; player table
+; !addr EfTable2=$9A   ; opponent table
+; !addr EfTarget=$9B   ; target card on table (0 in case not necessary)
+
+; cast effect A of card in Y; also init Ef* variables beforehand! (clobbers A,X,Y)
+CastEffect:
+            ; TODO use A
+            sty EfCard
+            lda Cards+CARD_EFFECT,y
+            ; just hard coded list for now
+            cmp #E_READY
+            beq Effect_Ready
+            cmp #E_ALL_GAIN11
+            beq Effect_AllGain11
+            rts
+
+; untap self (clobbers A,X)
+Effect_Ready:
+            ldx EfSelf
+            lda TD_STATUS,x
+            and #255-STATUS_TAPPED
+            sta TD_STATUS,x
+            rts
+
+; TODO for each card on table (not EfSelf) and that matches the Suit of EfCard, inc ATK and inc DEF
+Effect_AllGain11:
             rts
 
 
@@ -1132,8 +1186,6 @@ DrawPlayerTable:
             lda #>(SCREEN+15*40+(40-24)/2)
             jsr SetCursor
             ldy #PlayerData+PD_TABLE
-            bne .drawtable              ; always
-
 ; draw table in Y at Cursor (clobbers A,X,Y,TableIdx,Index)
 .drawtable:
             ldx #$FF                    ; hide inserting by default
