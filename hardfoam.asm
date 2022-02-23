@@ -51,8 +51,7 @@ CHR_ENDTURN=62 ; >
 ;
 HAND_CARDWIDTH=4
 TABLE_CARDWIDTH=5
-; Effects
-EFFECT_ONPLAY=1                         ; called (once) when spell card is played or moster card has been put on table
+MAX_EFFECT_QUEUE=20
 
 !addr SCREEN=$0400
 
@@ -66,11 +65,12 @@ EFFECT_ONPLAY=1                         ; called (once) when spell card is playe
 !addr ZP_RNG_HIGH = $09
 !addr Tmp1=$0A
 !addr Tmp2=$0B
+!addr EfTmp=$0B ; reuse Tmp2
 !addr Tmp3=$0C
 !addr TmpText=$0D
 ;!addr Suit=$0E
 !addr Joystick=$0F
-; player data (consecutive)
+; Player Data (consecutive) (SIZEOF_PD=64 bytes)
 !addr PlayerData=$10
     PD_LIFE=0       ; 0 .. 10
     PD_ENERGY=1     ; $30 .. $39
@@ -90,20 +90,19 @@ EFFECT_ONPLAY=1                         ; called (once) when spell card is playe
     MAX_TABLE=5     ; max #cards on table
     PD_DECK=32      ; 32 bytes (card#)
 SIZEOF_PD=64
-!addr AIData=$50
-!addr Index=$90     ; loop/selection index
-!addr MaxIndex=$91  ; <MaxIndex
-!addr SelectorIndex=$92 ; Index used for DrawCardSelect/ClearCardSelect
-!addr SelectorIndexBackup=$93
-!addr TableIdx=$94  ; loop index for DrawTable
-!addr InsertingPos=$95 ; place to insert card during DrawTable ($FF=disable)
-!addr InsertingCard=$96 ; card to show during DrawTable
+!addr Index=$50     ; loop/selection index
+!addr MaxIndex=$51  ; <MaxIndex
+!addr SelectorIndex=$52 ; Index used for DrawCardSelect/ClearCardSelect
+!addr SelectorIndexBackup=$53
+!addr TableIdx=$54  ; loop index for DrawTable
+!addr InsertingPos=$55 ; place to insert card during DrawTable ($FF=disable)
+!addr InsertingCard=$56 ; card to show during DrawTable
+!addr EfQPtr=$57 ; next place in Effect Queue
 ; Effect interface
-!addr EfCard=$97    ; card# that owns the effect
-!addr EfSelf=$98    ; card on table (0 in case of spell)
-!addr EfTable=$99   ; player table
-!addr EfTable2=$9A  ; opponent table
-!addr EfTarget=$9B  ; target card on table (0 in case not necessary)
+!addr EfSource=$58   ; Source of effect (Ptr to card on table or 0 in case of spell)
+!addr EfParam=$59    ; Parameter for effect (table or card to apply effect to)
+; AI Data (consecutive)
+!addr AIData=$90    ; PlayerData+$80 (SIZEOF_PD=64 bytes)
 ; Draws rectangle 5x5 (upto 8x6) via DrawF function (clobbers A,Y)
 !addr _Draw=$E0     ; $E0-$F6 is block drawing routine
 
@@ -914,13 +913,17 @@ NextRound:
             bne +                       ; not possible
 ;}
             ; cast card X from hand
-            ldx #3 ; DEBUG WANNABE
             jsr CastPlayerCard
-
             ; redraw screen
-            jsr DrawCounters
             jsr DrawPlayerHand
+            jsr DrawCounters
             jsr DrawPlayerTable
+            ; run all queued effects
+-           jsr RunEffect
+            jsr DrawCounters
+            jsr DrawPlayerTable ; TODO should this be part of RunEffect somehow?
+            ldy EfQPtr
+            bne -
 
 +           jmp .redraw
 
@@ -1009,9 +1012,7 @@ CastPlayerCard:
 +           lda #$FF
             sta PlayerData+PD_HAND,x    ; wipe last card
             ; TODO howto "uncast"?
-
-            lda #AIData+PD_TABLE
-            sta EfTable2
+            ; TODO howto select card target (that even might be cancelled or not exist?)
             lda Cards+CARD_LTSC,y
             and #%00001111              ; LTSSCCCC
             ldx #PlayerData
@@ -1021,18 +1022,13 @@ CastPlayerCard:
             beq .spell
             ; put monster card on table
             ; TODO select the card index on Table? / can you cancel putting a card down?
-            lda #PlayerData+PD_TABLE
-            sta EfTable
+            lda #PlayerData+PD_TABLE    ; table
             ldx #0                      ; card index on table
             jsr PutCardOnTable
             ; monster: Y=card# / X=PlayerData+PD_TABLE+card#*SIZEOF_TD("self") / A=1 (STATUS_TAPPED)
-            stx EfSelf
-            lda #EFFECT_ONPLAY
-            jmp CastEffect
-.spell:     ; spell:   Y=card# / X=PlayerData / A=0
-            sta EfSelf
-            lda #EFFECT_ONPLAY
-            jmp CastEffect
+            ; spell:   Y=card# / X=PlayerData / A=0
+.spell:     lda Cards+CARD_EFFECT,y
+            jmp QueueEffect
 
 ; put card Y on Table A at index X (0..MAX_TABLE-1) (clobbers A,X,Tmp1)
 ; Note that this blindly assumes there's room on the table!
@@ -1093,35 +1089,91 @@ UntapTable:
 ; EFFECTS
 ;----------------------------------------------------------------------------
 ; Effect interface
-; !addr EfCard=$97     ; card# that owns the effect
-; !addr EfSelf=$98     ; card on table (0 in case of spell)
-; !addr EfTable=$99    ; player table
-; !addr EfTable2=$9A   ; opponent table
-; !addr EfTarget=$9B   ; target card on table (0 in case not necessary)
+; !addr EfSource=$58   ; Source of effect (Ptr to card on table or 0 in case of spell)
+; !addr EfParam=$59    ; Parameter for effect (table or card to apply effect to)
 
-; cast effect A of card in Y; also init Ef* variables beforehand! (clobbers A,X,Y)
-CastEffect:
-            ; TODO use A
-            sty EfCard
-            lda Cards+CARD_EFFECT,y
-            ; just hard coded list for now
+; Queue effect A with Source X and Param Y (clobbers A,Y,EfTmp)
+QueueEffect:
+            sty EfTmp
+            ldy EfQPtr
+            inc EfQPtr
+!if DEBUG=1 {
+            cpy #MAX_EFFECT_QUEUE
+            bne +
+-           inc $D020                   ; Hang if Queue exhausted
+            jmp -
++           }
+            sta EQueueEffect,y
+            txa
+            sta EQueueSource,y
+            lda EfTmp
+            sta EQueueParam,y
+.stealrts3: rts
+
+; applies first effect from the Effect Queue (clobbers A,X,Y)
+RunEffect:
+            ldy EfQPtr
+            beq .stealrts3
+            dec EfQPtr
+            ldy EfQPtr
+            lda EQueueSource,y
+            sta EfSource
+            lda EQueueParam,y
+            sta EfParam
+            lda EQueueEffect,y
+
+            ; hard coded jump list
             cmp #E_READY
-            beq Effect_Ready
-            cmp #E_ALL_GAIN11
-            beq Effect_AllGain11
-            rts
-
-; untap self (clobbers A,X)
-Effect_Ready:
-            ldx EfSelf
+            bne +
+; untap Source (clobbers A,X)
+.Effect_Untap:
+            ldx EfSource
             lda TD_STATUS,x
             and #255-STATUS_TAPPED
             sta TD_STATUS,x
             rts
 
-; TODO for each card on table (not EfSelf) and that matches the Suit of EfCard, inc ATK and inc DEF
-Effect_AllGain11:
++           cmp #E_ALL_GAIN11
+            bne +
+; for each card on table (not EfSource) that matches the Suit of EfSource post effect TODO post effect Param
+.Effect_AllGain11:
+            ldx EfSource
+            ldy TD_CARD,x
+            lda Cards+CARD_LTSC,y
+            and #%00110000              ; LTSSCCCC SS=Suit(0,1,2,3)
+            sta Tmp3                    ; Suit
+            txa
+            and #$80
+            ora #PlayerData+PD_TABLE
+            tax                         ; first card on table
+            cpx EfSource
+            beq ++                      ; skip self
+-           ldy TD_CARD,x
+            cpy #$FF                    ; empty
+            beq ++
+            lda Cards+CARD_LTSC,y
+            and #%00110000              ; LTSSCCCC SS=Suit(0,1,2,3)
+            cmp Tmp3
+            bne ++                      ; skip wrong suit
+            lda #E_INTERNAL_ALLGAIN11
+            jsr QueueEffect             ; Queue effect A with Source X and Param Y (clobbers A,Y,EfTmp)
+++          txa
+            clc
+            adc #SIZEOF_TD
+            tax
+            and #$7F                    ; remove Player
+            cmp #PlayerData+PD_TABLE+MAX_TABLE*SIZEOF_TD
+            bne -
             rts
+
++           cmp #E_INTERNAL_ALLGAIN11
+            bne +
+; inc ATK and inc DEF of Source (clobbers X) TODO limit values
+.Effect_Gain11:
+            ldx EfSource
+            inc TD_ATK,x
+            inc TD_DEF,x
++           rts
 
 
 ;----------------------------------------------------------------------------
@@ -1615,6 +1667,7 @@ TextData:
     N_WANNABE=*-TextData
     !byte M_SUIT,M_WANNABE,0
     E_ALL_GAIN11=*-TextData ; All other cards of the same suit gain +1/+1
+    E_INTERNAL_ALLGAIN11=*-TextData+1
     !byte M_ALL,M_SUIT,M_GAIN11,0
     E_READY=*-TextData ; Card has no summoning sickness
     !byte M_READY,0
@@ -1701,6 +1754,20 @@ frame_DEF: !byte $B0
     !byte 42,96,96,96,42
     !byte 96,42,42,42,96
     !byte 96,96,96,96,96
+
+
+;----------------------------------------------------------------------------
+; RUN TIME DATA
+;----------------------------------------------------------------------------
+
+; Effect Queue (SoA)
+; Put next effect at index EfQPtr and call EffectAdded
+EQueueEffect:
+    !fill MAX_EFFECT_QUEUE,0
+EQueueSource:
+    !fill MAX_EFFECT_QUEUE,0
+EQueueParam:
+    !fill MAX_EFFECT_QUEUE,0
 
 
 ;----------------------------------------------------------------------------
