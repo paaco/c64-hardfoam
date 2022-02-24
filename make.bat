@@ -1,3 +1,4 @@
-acme -f cbm -DDEBUG=0 -o .cache/hardfoamp.prg hardfoam.asm
-exomizer sfx sys -M256 .cache/hardfoamp.prg -o hardfoam.prg
-dir hardfoam.prg
+acme -f cbm -DDEBUG=0 -o .cache/hardfoam-release.prg hardfoam.asm
+exomizer sfx sys .cache/hardfoam-release.prg -o hardfoam.exo.prg
+alz64 -s -a .cache\hardfoam-release.prg hardfoam.alz.prg
+dir hardfoam*.prg
