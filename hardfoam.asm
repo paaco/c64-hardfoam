@@ -2,11 +2,11 @@
 ; Developed for the https://ausretrogamer.com/2022-reset64-4kb-craptastic-game-competition
 
 ; TODO: turn: attack with table cards (pick your own order, attack not required)
-; TODO: AI turn: take card; if necessary discard the (first)) most expensive one
-; TODO: AI turn: while possible, play random cards from hand
 ; TODO: AI turn: with each table card, attack random table card
 ; TODO: AI turn: if there are no opponent table cards left, attack player
-; TODO: AI end turn
+; TODO: your turn/opponent's turn animation (adds at least 100 bytes packed)
+; TODO: 15+1 free deck selector
+; TODO: decide on logo (adds at least 200 bytes packed)
 
 !ifndef DEBUG {DEBUG=1}
 !ifndef INTRO {INTRO=0}
@@ -139,6 +139,7 @@ DrawF_Frame:
             beq +
 DrawF_ACharCol: ; (clobbers A)
             sta (_CursorPos),y
+DrawF_CharCol:
             lda CharCol
             sta (_ColorPos),y
 +           rts
@@ -170,8 +171,11 @@ DrawF_ASuitCol: ; (clobbers A)
 ; CHARACTER DRAWING
 ;----------------------------------------------------------------------------
 
-; configures Draw function with X=config (clobbers none)
-_Configure:
+; configures Draw function with X=config and Draws with A=srcoffset, Y=0(dstoffset) (clobbers A,X,Y)
+Draw:
+            ldy #0
+; configures Draw function with X=config and Draws with A=srcoffset, Y=dstoffset (clobbers A,X,Y)
+DrawWithOffset:
             pha
             lda ConfigData,x
             sta <.drawfptr
@@ -180,7 +184,8 @@ _Configure:
             lda ConfigData+2,x
             sta <.drawheight
             pla
-            rts
+            tax
+            jmp _Draw
 
 ConfigData:
     CFG_FRAME=*-ConfigData              ; 5x6 card
@@ -193,15 +198,6 @@ ConfigData:
     !byte <DrawF_Frame,5,2*40
     CFG_GLYPH2=*-ConfigData             ; 3x1 glyph drawn at offset +41 (for 5x2 card)
     !byte <DrawF_Glyph,3,2*40
-
-; configures Draw function with X=config and Draws with A=srcoffset, Y=0(dstoffset) (clobbers A,X,Y)
-Draw:
-            ldy #0
-; configures Draw function with X=config and Draws with A=srcoffset, Y=dstoffset (clobbers A,X,Y)
-DrawWithOffset:
-            jsr _Configure
-            tax
-            jmp _Draw
 
 ; adds A to cursor (clobbers A,Y)
 AddToCursor:
@@ -806,7 +802,11 @@ Start:
             jsr SetCursorDrawCardBack
             jsr DrawAIHand
 
-NextRound:
+;---------------
+; PLAYER'S TURN
+;---------------
+
+NextPlayerRound:
             ; pull next card
             jsr PullPlayerDeckCard
 
@@ -828,7 +828,7 @@ NextRound:
 .redraw:    ldy #<(SCREEN+15*40)
             lda #>(SCREEN+15*40)
             jsr SetCursor
-            +WaitVBL($30)
+            +WaitVBL($43)
             jsr ClearLowerLines         ; clears text area
             ldy SelectorIndex
             cpy #MAX_HAND+1
@@ -905,7 +905,7 @@ NextRound:
             ldy #PlayerData+PD_TABLE
             jsr UntapTable
             jsr DrawPlayerTable
-            jmp NextRound
+            jmp NextAIRound
 
             ; play card?
 +           lda #CHR_PLAY
@@ -915,8 +915,9 @@ NextRound:
             ; cast card X from hand
             jsr CastPlayerCard
             ; redraw screen
-            jsr DrawPlayerHand
+            +WaitVBL($83)
             jsr DrawCounters
+            jsr DrawPlayerHand
             jsr DrawPlayerTable
             ; run all queued effects
 -           jsr RunEffect
@@ -929,6 +930,66 @@ NextRound:
 
 HandSelectorOffsets:
     !for i,0,MAX_HAND { !byte 10 + i * HAND_CARDWIDTH }
+
+
+;-----------
+; AI'S TURN
+;-----------
+
+NextAIRound:
+            ; pull next card
+            jsr PullAIDeckCard
+            jsr DrawAIHand
+
+            ; restore energy for player
+            ldx #AIData
+            jsr Energize
+            jsr DrawCounters
+
+            ; AI turn: while possible (room on table, possible target), play random cards from hand
+.ai_castmore:
+            jsr Random
+            and #$0F                    ; 0..15
+            sta Tmp1                    ; nr of castable cards to skip
+            sta Tmp2
+--          ldx #0
+-           ldy AIData+PD_HAND,x
+            cpy #$FF
+            beq ++
+            lda AIData+PD_ENERGY
+            lda Cards+CARD_LTSC,y
+            and #%00001111              ; LTSSCCCC
+            ora #$30                    ; $30..$39 as energy
+            cmp AIData+PD_ENERGY
+            beq .ai_canuse
+            bcs +
+.ai_canuse: ; TODO when card is a monster, check that there is room on the table (i.e. card 5 is empty)
+            dec Tmp1
+            bpl +
+            ; castable card found
+            jsr CastAICard
+            +WaitVBL($83)
+            jsr DrawCounters
+            jsr DrawAIHand
+            jsr DrawAITable
+            ; TODO run effects
+            jmp .ai_castmore
++           inx
+            cpx #MAX_HAND
+            bne -
+++          lda Tmp1
+            cmp Tmp2                    ; are any cards being considered?
+            bne --                      ; yes, so just retry
+            ; no castable cards found
+
+            ; TODO AI turn: with each table card, attack random table card
+            ; TODO AI turn: if there are no opponent table cards left, attack player
+
+            ; end of turn
+            ldy #AIData+PD_TABLE
+            jsr UntapTable
+            jsr DrawAITable
+            jmp NextPlayerRound
 
 
 ;----------------------------------------------------------------------------
@@ -1030,12 +1091,43 @@ CastPlayerCard:
 .spell:     lda Cards+CARD_EFFECT,y
             jmp QueueEffect
 
-; put card Y on Table A at index X (0..MAX_TABLE-1) (clobbers A,X,Tmp1)
+; cast card #X from hand of AI (clobbers A,X,Y)
+CastAICard:
+            ldy AIData+PD_HAND,x    ; card# in Y
+            ; remove card by shifting cards X..MAX_HAND-1 left
+-           cpx #MAX_HAND-1             ; 0..MAX_HAND-1
+            beq +
+            lda AIData+PD_HAND+1,x
+            sta AIData+PD_HAND,x
+            inx
+            bne -                       ; "always"
++           lda #$FF
+            sta AIData+PD_HAND,x    ; wipe last card
+            ; TODO howto select card target (that even might be cancelled or not exist?)
+            lda Cards+CARD_LTSC,y
+            and #%00001111              ; LTSSCCCC
+            ldx #AIData
+            jsr DecreaseEnergy
+            lda Cards+CARD_LTSC,y
+            and #%01000000              ; LTSSCCCC T=Type(0=Spell/1=Monster)
+            beq .spell2
+            ; put monster card on table
+            ; TODO select the card index on Table?
+            lda #AIData+PD_TABLE        ; table
+            ldx #0                      ; card index on table
+            jsr PutCardOnTable
+            ; monster: Y=card# / X=AIData+PD_TABLE+card#*SIZEOF_TD("self") / A=1 (STATUS_TAPPED)
+            ; spell:   Y=card# / X=AIData / A=0
+.spell2:    lda Cards+CARD_EFFECT,y
+            jmp QueueEffect
+
+
+; put card Y on Table A at index X (0..MAX_TABLE-1) (clobbers A,X,Tmp1) returns card pointer in X
 ; Note that this blindly assumes there's room on the table!
 PutCardOnTable:
             pha
             clc
-            adc TableCardOffsets,x      ; => A is index to card on Table (AI/PlayerData+PD_TABLE+X*SIZEOF_TD)
+            adc TableCardOffsets,x      ; => A is pointer to card on Table (AI/PlayerData+PD_TABLE+X*SIZEOF_TD)
             sta Tmp1
             pla
             ; make room for card on table
@@ -1184,7 +1276,11 @@ RunEffect:
 DrawAIHand:
             lda #AIData+PD_HAND
             sta .fixuphandptr
+!if DEBUG=1 {
+            lda #<DrawPartialCard ; draw visible AI card
+} else {
             lda #<DrawPartialCardBack
+}
             sta .fixupdrawcard
             ldy #<(SCREEN+0*40+8)
             lda #>(SCREEN+0*40+8)
@@ -1231,6 +1327,14 @@ DrawPlayerHand:
             sta (_CursorPos),y
             bne -                       ; always
 +           rts
+
+; draw upper table
+DrawAITable:
+            ldy #<(SCREEN+4*40+(40-24)/2)
+            lda #>(SCREEN+4*40+(40-24)/2)
+            jsr SetCursor
+            ldy #AIData+PD_TABLE
+            bne .drawtable              ; always
 
 ; draw lower table
 DrawPlayerTable:
@@ -1483,14 +1587,14 @@ Cards:
     !byte $56, $12, N_WANNABE,       T_NONE,       G_WANNABE
     !byte $57, $12, N_WANNABE,       T_NONE,       G_WANNABE
     C_CANDY_LEADER=*-Cards
-    !byte $E0, $00, N_CANDY_LEADER,  T_NONE,       G_LEGND_CANDY
-    !byte $61, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $E2, $02, N_CANDY_LEADER,  T_NONE,       G_LEGND_CANDY
+    !byte $61, $11, N_WANNABE,       T_NONE,       G_WANNABE
     !byte $62, $12, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $63, $12, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $64, $12, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $65, $12, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $66, $12, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $67, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $63, $13, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $64, $14, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $65, $15, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $66, $16, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $67, $17, N_WANNABE,       T_NONE,       G_WANNABE
     C_SOAP_LEADER=*-Cards
     !byte $F0, $00, N_SOAP_LEADER,   T_NONE,       G_LEGND_SOAP
     !byte $71, $12, N_WANNABE,       T_NONE,       G_WANNABE
@@ -1747,13 +1851,6 @@ frame_DEF: !byte $B0
     FRAME2_CARDBACK=*-FrameData         ; 5x2 bottom of card back
     !byte 194,102,102,102,194
     !byte 252,192,192,192,254
-    FRAME_SHIELDED=*-FrameData          ; 5x6 shielded overlay
-    !byte 96,42,42,42,96
-    !byte 42,96,96,96,42
-    !byte 42,96,96,96,42
-    !byte 42,96,96,96,42
-    !byte 96,42,42,42,96
-    !byte 96,96,96,96,96
 
 
 ;----------------------------------------------------------------------------
@@ -1761,7 +1858,6 @@ frame_DEF: !byte $B0
 ;----------------------------------------------------------------------------
 
 ; Effect Queue (SoA)
-; Put next effect at index EfQPtr and call EffectAdded
 EQueueEffect:
     !fill MAX_EFFECT_QUEUE,0
 EQueueSource:
