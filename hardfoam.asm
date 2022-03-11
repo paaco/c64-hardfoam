@@ -339,7 +339,9 @@ DrawCounters:
             sta CharCol
 +           lda #$53                    ; heart
             ldy #0
-            jsr DrawF_ACharCol
+            sta (_CursorPos),y
+            lda CharCol
+            sta (_ColorPos),y
             lda #40
             jsr AddToCursor
             dex
@@ -661,26 +663,31 @@ SelectCard:
 ; - cursor is assumed to be top-left of card deck
 ClearSelector:
             ldx SelectorIndex
-            jsr .drawselectorspace
-            inx
-.drawselectorspace:
             lda #CHR_SPACE
-            bne .drawselector           ; always
+            ldy CardSelectorOffsets,x
+            sta (_CursorPos),y
+            inx
+            ldy CardSelectorOffsets,x
+            sta (_CursorPos),y
+            rts
 
-; draws selection symbols around a card at Cursor + Index*6 (clobbers A,X,Y)
+; draws selection symbols around a card at Cursor + Index*6 (clobbers A,X,Y) sets SelectorIndex to Index
 ; - cursor is assumed to be top-left of card deck
 DrawSelector:
-            lda #COL_SELECTED
-            sta CharCol
             ldx Index
             stx SelectorIndex
             lda #'>'
-            jsr .drawselector
+            ldy CardSelectorOffsets,x
+            sta (_CursorPos),y
+            lda #COL_SELECTED
+            sta (_ColorPos),y
             inx
             lda #'<'
-.drawselector:
             ldy CardSelectorOffsets,x
-            jmp DrawF_ACharCol
+            sta (_CursorPos),y
+            lda #COL_SELECTED
+            sta (_ColorPos),y
+            rts
 
 CardSelectorOffsets: ; max 6 cards can be selected (index 5)
     !for i,0,5 { !byte 2*40-1 + i*6 }
@@ -956,7 +963,6 @@ NextAIRound:
 -           ldy AIData+PD_HAND,x
             cpy #$FF
             beq ++
-            lda AIData+PD_ENERGY
             lda Cards+CARD_LTSC,y
             and #%00001111              ; LTSSCCCC
             ora #$30                    ; $30..$39 as energy
@@ -964,6 +970,8 @@ NextAIRound:
             beq .ai_canuse
             bcs +
 .ai_canuse: ; TODO when card is a monster, check that there is room on the table (i.e. card 5 is empty)
+            ;lda Cards+CARD_LTSC,y
+            ;and #%01000000              ; LTSSCCCC T=Type(0=Spell/1=Monster)
             dec Tmp1
             bpl +
             ; castable card found
@@ -1422,10 +1430,10 @@ DrawTableCard:
             beq .stealrts1              ; same -> done
             bcc .higher
             lda #COL_LOWER
-            bne +                       ; always
+            !byte $2C ; BIT skip next 2 bytes
 .higher:    lda #COL_HIGHER
             .fixupcolorwrite=*
-+           sta CharCol                 ; SELF-MODIFIED $85=STA $24=BIT
+            sta CharCol                 ; SELF-MODIFIED $85=STA $24=BIT
             lda TD_ATK,x
             ora #$30                    ; regular digits
             jmp DrawF_ACharCol
@@ -1434,13 +1442,12 @@ DrawTableCard:
 DecorateFrame:
             ; setup type/cost
             lda Cards+CARD_LTSC,x
-            pha
-            and #%01000000              ; LTSSCCCC
+            and #%01000000              ; LTSSCCCC T=Type(0=Spell/1=Monster)
             asl
             asl                         ; C=T (0=spell, 1=monster)
             adc #$D7                    ; T=0->D7(ball) T=1->D8(clover)
             sta frame_TYPE
-            pla
+            lda Cards+CARD_LTSC,x
             and #%00001111              ; LTSSCCCC
             ora #$B0                    ; 0..9 reversed
             sta frame_COST
@@ -1450,11 +1457,10 @@ DecorateFrame:
 DecorateBottomFrame:
             ; setup ATK/DEF
             lda Cards+CARD_ATDF,x
-            pha
             and #$0F
             ora #$B0
             sta frame_DEF
-            pla
+            lda Cards+CARD_ATDF,x
             lsr
             lsr
             lsr
@@ -1466,14 +1472,13 @@ DecorateBottomFrame:
 ; sets CharCol and SuitCol according to card in X (clobbers A)
 SetColors:
             ; setup colors
-            lda #COL_LEGEND
-            sta CharCol
             lda Cards+CARD_LTSC,x
-            pha
             bmi + ; legend
             lda #COL_PLAIN
+            !byte $2C ; BIT skip next 2 bytes
++           lda #COL_LEGEND
             sta CharCol
-+           pla
+            lda Cards+CARD_LTSC,x
             lsr
             lsr
             lsr
