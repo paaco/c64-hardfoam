@@ -7,6 +7,7 @@
 ; TODO: your turn/opponent's turn animation (adds at least 100 bytes packed)
 ; TODO: 15+1 free deck selector
 ; TODO: decide on logo (adds at least 200 bytes packed)
+; TODO: experimenting with _Draw vs specific functions showed 2x speedup (maybe more)
 
 !ifndef DEBUG {DEBUG=1}
 !ifndef INTRO {INTRO=0}
@@ -118,6 +119,10 @@ SIZEOF_PD=64
             }
 }
 
+!macro SKIP2 {
+    !byte $2C ; BIT skip next 2 bytes
+}
+
 ;############################################################################
 
 *=$0801
@@ -142,7 +147,7 @@ DrawF_ACharCol: ; (clobbers A)
 DrawF_CharCol:
             lda CharCol
             sta (_ColorPos),y
-+           rts
++           jmp _DrawEnd
 
 ; draws glyph in SuitCol at Cursor + Y + 1 (clobbers A,X)
 DrawF_Glyph:
@@ -153,7 +158,7 @@ DrawF_Glyph:
             lda SuitCol
             sta (_ColorPos),y
             dey
-            rts
+            jmp _DrawEnd
 
 ; draws space in SuitCol at Cursor + Y (clobbers A)
 DrawF_ClearSuitCol:
@@ -162,7 +167,7 @@ DrawF_ASuitCol: ; (clobbers A)
             sta (_CursorPos),y
             lda SuitCol
             sta (_ColorPos),y
-            rts
+            jmp _DrawEnd
 
 !if (>DrawF_Frame != >DrawF_Frame) { !error "All DrawF functions must be in same page" }
 
@@ -243,14 +248,17 @@ DrawTextX:
             bpl +
             and #$7F                    ; last character
             ldx #$FF                    ; ends loop
-+           jsr DrawF_ASuitCol
++           sta (_CursorPos),y
+            lda SuitCol
+            sta (_ColorPos),y
             iny
             inx
             bne -
             ldx TmpText
             lda TextData+1,x            ; lookahead
             beq ++                      ; text ends directly with 0
-            jsr DrawF_ClearSuitCol      ; put space
+            lda #CHR_SPACE
+            sta (_CursorPos),y
             iny
             inx
             bne --
@@ -509,7 +517,8 @@ INITDRAW:
 !pseudopc _Draw {
             ;ldy #0 ; never used
             .drawfptr=*+1
--           jsr DrawF_Frame             ; (1) change low byte of ptr to other routine
+-           jmp DrawF_Frame             ; (1) change low byte of ptr to other routine
+_DrawEnd:
             iny
             tya
             and #%00000111
@@ -871,23 +880,31 @@ NextPlayerRound:
             jsr SetCursor
             ldx SelectorIndex
             cpx #MAX_HAND
-            bne +
-            lda #CHR_ENDTURN
-            bne ++                      ; always
+            beq .can_end
 +           ldy PlayerData+PD_HAND,x
             cpy #$FF                    ; is there a card?
             beq .no_energy              ; no card -> handle as if no energy
             lda Cards+CARD_LTSC,y
+            and #%01000000              ; LTSSCCCC T=Type(0=Spell/1=Monster)
+            beq +
+            lda PlayerData+PD_TABLE+SIZEOF_TD*(MAX_TABLE-1)+TD_CARD ; last card on table
+            cmp #$FF                    ; still open?
+            bne .no_energy              ; table full
++           lda Cards+CARD_LTSC,y
             and #%00001111              ; LTSSCCCC
             ora #$30                    ; $30..$39 as energy
             cmp PlayerData+PD_ENERGY
             beq .can_afford
             bcc .can_afford
 .no_energy: lda #CHR_NO_PLAY
-            bne ++                      ; always
+            +SKIP2
+.can_end:   lda #CHR_ENDTURN
+            +SKIP2
 .can_afford:lda #CHR_PLAY
 ++          ldy HandSelectorOffsets,x
-            jsr DrawF_ASuitCol
+            sta (_CursorPos),y
+            lda SuitCol
+            sta (_ColorPos),y
 
 ;!if DEBUG=0 {
             jsr DebounceJoystick
@@ -969,10 +986,14 @@ NextAIRound:
             cmp AIData+PD_ENERGY
             beq .ai_canuse
             bcs +
-.ai_canuse: ; TODO when card is a monster, check that there is room on the table (i.e. card 5 is empty)
-            ;lda Cards+CARD_LTSC,y
-            ;and #%01000000              ; LTSSCCCC T=Type(0=Spell/1=Monster)
-            dec Tmp1
+.ai_canuse: ; verify that table has room for monster card to cast
+            lda Cards+CARD_LTSC,y
+            and #%01000000              ; LTSSCCCC T=Type(0=Spell/1=Monster)
+            beq .ai_canuse2             ; spells can always be cast
+            lda AIData+PD_TABLE+SIZEOF_TD*(MAX_TABLE-1)+TD_CARD ; last card on table
+            cmp #$FF                    ; still open?
+            bne +                       ; table full
+.ai_canuse2:dec Tmp1
             bpl +
             ; castable card found
             jsr CastAICard
@@ -1427,16 +1448,19 @@ DrawTableCard:
             lda (_CursorPos),y
             and #$0F
             cmp TD_ATK,x
-            beq .stealrts1              ; same -> done
+            beq +                       ; same -> done
             bcc .higher
             lda #COL_LOWER
-            !byte $2C ; BIT skip next 2 bytes
+            +SKIP2
 .higher:    lda #COL_HIGHER
             .fixupcolorwrite=*
             sta CharCol                 ; SELF-MODIFIED $85=STA $24=BIT
             lda TD_ATK,x
             ora #$30                    ; regular digits
-            jmp DrawF_ACharCol
+            sta (_CursorPos),y
+            lda CharCol
+            sta (_ColorPos),y
++           rts
 
 ; decorates top and bottom of frame according to card in X (clobbers A)
 DecorateFrame:
@@ -1475,7 +1499,7 @@ SetColors:
             lda Cards+CARD_LTSC,x
             bmi + ; legend
             lda #COL_PLAIN
-            !byte $2C ; BIT skip next 2 bytes
+            +SKIP2
 +           lda #COL_LEGEND
             sta CharCol
             lda Cards+CARD_LTSC,x
@@ -1485,7 +1509,7 @@ SetColors:
             lsr
             and #$03
             sta SuitCol
-.stealrts1: rts
+            rts
 
 ; draws decorated card in X at Cursor (clobbers A,X,Y)
 ; - draws legend border, full decoration and default attack/defense
@@ -1599,7 +1623,7 @@ Cards:
     !byte $64, $14, N_WANNABE,       T_NONE,       G_WANNABE
     !byte $65, $15, N_WANNABE,       T_NONE,       G_WANNABE
     !byte $66, $16, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $67, $17, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $27, $17, N_WANNABE,       T_NONE,       G_WANNABE
     C_SOAP_LEADER=*-Cards
     !byte $F0, $00, N_SOAP_LEADER,   T_NONE,       G_LEGND_SOAP
     !byte $71, $12, N_WANNABE,       T_NONE,       G_WANNABE
