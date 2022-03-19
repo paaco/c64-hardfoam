@@ -98,10 +98,14 @@ SIZEOF_PD=64
 !addr TableIdx=$54  ; loop index for DrawTable
 !addr InsertingPos=$55 ; place to insert card during DrawTable ($FF=disable)
 !addr InsertingCard=$56 ; card to show during DrawTable
-!addr EfQPtr=$57 ; next place in Effect Queue
+!addr EfQPtr=$57    ; next place in Effect Queue
 ; Effect interface
-!addr EfSource=$58   ; Source of effect (Ptr to card on table or 0 in case of spell)
-!addr EfParam=$59    ; Parameter for effect (table or card to apply effect to)
+!addr EfSource=$58  ; Effect source (Ptr to card on table or 0 in case of spell)
+!addr EfParam=$59   ; Parameter for effect (table or card to apply effect to)
+!addr FxCard=$5A    ; FX Ptr to card on table
+!addr FxScrOff=$5B  ; FX screen offset
+!addr FxPtr=$5C     ; FX current table offset
+!addr FxLoop=$5D    ; FX loop counter temp data used during FX
 ; AI Data (consecutive)
 !addr AIData=$90    ; PlayerData+$80 (SIZEOF_PD=64 bytes)
 ; Draws rectangle 5x5 (upto 8x6) via DrawF function (clobbers A,Y)
@@ -259,6 +263,8 @@ DrawTextX:
             beq ++                      ; text ends directly with 0
             lda #CHR_SPACE
             sta (_CursorPos),y
+            lda SuitCol
+            sta (_ColorPos),y
             iny
             inx
             bne --
@@ -936,7 +942,8 @@ NextPlayerRound:
             cmp (_CursorPos),y
             bne +                       ; not possible
 ;}
-            ; cast card X from hand
+            ; cast card #X from hand
+            ; TODO pick destination on table (LEFT/RIGHT and DOWN to cancel), and if required, pick target
             jsr CastPlayerCard
             ; redraw screen
             +WaitVBL($83)
@@ -1089,7 +1096,7 @@ DecreaseEnergy:
             sta PD_ENERGY,x
 +           rts
 
-; cast card #X from hand of Player (clobbers A,X,Y)
+; cast card #X from hand of Player (clobbers A,X,Y) TODO card index on table + possible target
 CastPlayerCard:
             ldy PlayerData+PD_HAND,x    ; card# in Y
             ; remove card by shifting cards X..MAX_HAND-1 left
@@ -1101,8 +1108,6 @@ CastPlayerCard:
             bne -                       ; "always"
 +           lda #$FF
             sta PlayerData+PD_HAND,x    ; wipe last card
-            ; TODO howto "uncast"?
-            ; TODO howto select card target (that even might be cancelled or not exist?)
             lda Cards+CARD_LTSC,y
             and #%00001111              ; LTSSCCCC
             ldx #PlayerData
@@ -1111,7 +1116,6 @@ CastPlayerCard:
             and #%01000000              ; LTSSCCCC T=Type(0=Spell/1=Monster)
             beq .spell
             ; put monster card on table
-            ; TODO select the card index on Table? / can you cancel putting a card down?
             lda #PlayerData+PD_TABLE    ; table
             ldx #0                      ; card index on table
             jsr PutCardOnTable
@@ -1120,7 +1124,7 @@ CastPlayerCard:
 .spell:     lda Cards+CARD_EFFECT,y
             jmp QueueEffect
 
-; cast card #X from hand of AI (clobbers A,X,Y)
+; cast card #X from hand of AI (clobbers A,X,Y) TODO card index on table + possible target
 CastAICard:
             ldy AIData+PD_HAND,x    ; card# in Y
             ; remove card by shifting cards X..MAX_HAND-1 left
@@ -1132,7 +1136,6 @@ CastAICard:
             bne -                       ; "always"
 +           lda #$FF
             sta AIData+PD_HAND,x    ; wipe last card
-            ; TODO howto select card target (that even might be cancelled or not exist?)
             lda Cards+CARD_LTSC,y
             and #%00001111              ; LTSSCCCC
             ldx #AIData
@@ -1141,7 +1144,6 @@ CastAICard:
             and #%01000000              ; LTSSCCCC T=Type(0=Spell/1=Monster)
             beq .spell2
             ; put monster card on table
-            ; TODO select the card index on Table?
             lda #AIData+PD_TABLE        ; table
             ldx #0                      ; card index on table
             jsr PutCardOnTable
@@ -1252,7 +1254,8 @@ RunEffect:
             lda TD_STATUS,x
             and #255-STATUS_TAPPED
             sta TD_STATUS,x
-            rts
+            lda #FX_UNTAP
+            jmp PlayFX
 
 +           cmp #E_ALL_GAIN11
             bne +
@@ -1282,19 +1285,61 @@ RunEffect:
             clc
             adc #SIZEOF_TD
             tax
-            and #$7F                    ; remove Player
+            and #$7F                    ; make it work with both Players
             cmp #PlayerData+PD_TABLE+MAX_TABLE*SIZEOF_TD
             bne -
-            rts
+--          rts
 
 +           cmp #E_INTERNAL_ALLGAIN11
-            bne +
+            bne -- ; done
 ; inc ATK and inc DEF of Source (clobbers X) TODO limit values
 .Effect_Gain11:
             ldx EfSource
             inc TD_ATK,x
             inc TD_DEF,x
-+           rts
+            lda #FX_GAIN11
+            jmp PlayFX
+
+; plays effect A on card on table X (clobbers A,X,Y,FxPtr,FxCard,FxScrOff,FxLoop)
+PlayFX:
+            sta FxPtr
+            stx FxCard
+            ; set cursor for ColorCard
+            lda FXOffsets-(PlayerData+PD_TABLE),x
+            sta FxScrOff
+            ; set cursor for DrawTableCard
+            ldy #<(SCREEN+15*40+(40-24)/2-8)
+            lda #>(SCREEN+15*40+(40-24)/2-8)
+            jsr SetCursor
+            lda FXOffsets-(PlayerData+PD_TABLE),x
+            and #$7F
+            jsr AddToCursor
+.playfxloop:
+            ldy FxPtr
+            lda FxData,y                ; FX #loops
+            bne +                       ; 0=end FX
+            rts
++           sta FxLoop
+            inc FxPtr
+-           +WaitVBL($E0)
+            ldy FxPtr
+            lda FxData,y                ; FX parameter: 0..15=color, <0=tablecard
+            bmi +
+            ldy FxScrOff
+            jsr ColorCard
+.playfx2:   dec FxLoop
+            bne -
+            inc FxPtr
+            jmp .playfxloop
++           ldy FxCard
+            jsr DrawTableCard
+            jmp .playfx2
+
+FXOffsets:
+            !for i,0,MAX_TABLE-1 { !byte 8 + i * (TABLE_CARDWIDTH+1),0,0,0 } ; each entry is SIZEOF_TD
+!if (*-FXOffsets <> MAX_TABLE*SIZEOF_TD) { !error "FXOffsets table wrong size" }
+            !fill $80-SIZEOF_TD*MAX_TABLE,0
+            !for i,0,MAX_TABLE-1 { !byte $88 + i * (TABLE_CARDWIDTH+1),0,0,0 } ; each entry is SIZEOF_TD
 
 
 ;----------------------------------------------------------------------------
@@ -1357,21 +1402,19 @@ DrawPlayerHand:
             bne -                       ; always
 +           rts
 
-; draw upper table
+; draw upper table (clobbers A,X,Y,TableIdx,Index)
 DrawAITable:
             ldy #<(SCREEN+4*40+(40-24)/2)
             lda #>(SCREEN+4*40+(40-24)/2)
             jsr SetCursor
             ldy #AIData+PD_TABLE
             bne .drawtable              ; always
-
-; draw lower table
+; draw lower table (clobbers A,X,Y,TableIdx,Index)
 DrawPlayerTable:
             ldy #<(SCREEN+15*40+(40-24)/2)
             lda #>(SCREEN+15*40+(40-24)/2)
             jsr SetCursor
             ldy #PlayerData+PD_TABLE
-; draw table in Y at Cursor (clobbers A,X,Y,TableIdx,Index)
 .drawtable:
             ldx #$FF                    ; hide inserting by default
 ; draw table in Y at Cursor inserting card A at position X (clobbers A,X,Y,TableIdx,Index)
@@ -1380,7 +1423,7 @@ DrawTableInserting:
             sta InsertingCard
             ldx #MAX_TABLE
             jsr SetMaxIndexX0
--           sty TableIdx                ; $1C or $5C
+-           sty TableIdx                ; starts at $1C or $9C
             cpx InsertingPos
             beq .drawinsert
             jsr DrawTableCard
@@ -1535,9 +1578,9 @@ DrawCardBack:
             ldx #CFG_FRAME
             jmp Draw
 
-            !align $0F,0,0 ; force DrawPartialCard* in same
+            !align $0F,0,0 ; force DrawPartialCard* in same page
 
-; draws top 2-lines of card background at Cursor (clobbers A,X,Y)
+; draws bottom 2-lines of card background at Cursor (clobbers A,X,Y)
 DrawPartialCardBack:
             lda #COL_CARDBACK
             sta CharCol
@@ -1582,6 +1625,73 @@ DrawCardText:
             ldy #40
             lda Cards+CARD_EFFECT,x
             jmp DrawText
+
+; colors card with color A at offset Y <$80 is Player, >=$80 is AI (clobbers X,Y)
+ColorCard:
+            ldx #5
+            cpy #$80
+            bcc .ColorPlayerCard
+-           sta $D800+(4+0)*40-$80,y
+            sta $D800+(4+1)*40-$80,y
+            sta $D800+(4+2)*40-$80,y
+            sta $D800+(4+3)*40-$80,y
+            sta $D800+(4+4)*40-$80,y
+            sta $D800+(4+5)*40-$80,y
+            iny
+            dex
+            bne -
+            rts
+
+; colors player card with color A at offset Y (clobbers X,Y)
+.ColorPlayerCard:
+-           sta $D800+(15+0)*40,y
+            sta $D800+(15+1)*40,y
+            sta $D800+(15+2)*40,y
+            sta $D800+(15+3)*40,y
+            sta $D800+(15+4)*40,y
+            sta $D800+(15+5)*40,y
+            iny
+            dex
+            bne -
+            rts
+
+NEWSTYLE=0
+!if NEWSTYLE=1 {
+; draws glyph of AI card in X at offset Y in SuitCol (clobbers A,X,Y)
+DrawAIGlyph:
+            lda Cards+CARD_GLYPH,x      ; glyph offset
+            tax
+            lda GlyphData,x
+            sta SCREEN+(4+0)*40,y
+            lda GlyphData+3,x
+            sta SCREEN+(4+1)*40,y
+            lda GlyphData+6,x
+            sta SCREEN+(4+2)*40,y
+            lda SuitCol
+            sta $D800+(4+0)*40,y
+            sta $D800+(4+1)*40,y
+            sta $D800+(4+2)*40,y
+            inx
+            iny
+            rts
+
+DrawPlayerGlyph:
+            lda Cards+CARD_GLYPH,x      ; glyph offset
+            tax
+            lda GlyphData,x
+            sta SCREEN+(15+0)*40,y
+            lda GlyphData+3,x
+            sta SCREEN+(15+1)*40,y
+            lda GlyphData+6,x
+            sta SCREEN+(15+2)*40,y
+            lda SuitCol
+            sta $D800+(15+0)*40,y
+            sta $D800+(15+1)*40,y
+            sta $D800+(15+2)*40,y
+            inx
+            iny
+            rts
+}
 
 
 ;----------------------------------------------------------------------------
@@ -1880,6 +1990,26 @@ frame_DEF: !byte $B0
     FRAME2_CARDBACK=*-FrameData         ; 5x2 bottom of card back
     !byte 194,102,102,102,194
     !byte 252,192,192,192,254
+
+
+;----------------------------------------------------------------------------
+; COLOR FX
+;----------------------------------------------------------------------------
+
+; Each FX is a list of color changes for a single card TODO accompanied by a sound FX
+FxData:
+    ; duration,color
+    ;  duration: #frames, list ends with duration=0
+    ;  color: 0..15=respective color, <0=draw table card
+    FX_UNTAP=*-FxData
+    !byte 10,WHITE
+    !byte 0
+    FX_GAIN11=*-FxData
+    !byte 30,GREEN
+    !byte 5,$FF
+    !byte 30,WHITE
+    FX_DROPCARD=*-FxData
+    !byte 0
 
 
 ;----------------------------------------------------------------------------
