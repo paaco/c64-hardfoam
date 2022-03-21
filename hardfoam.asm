@@ -922,11 +922,19 @@ NextPlayerRound:
 +           cmp #%11111011              ; LEFT
             bne +
             dec SelectorIndex
-+           cmp #%11101111              ; FIRE
++           cmp #%11111110              ; UP
             bne +
-
+            lda PlayerData+PD_TABLE+TD_CARD ; first card on table
+            cmp #$FF                    ; still open?
+            beq ++                      ; no attack possible
+            ; TODO select attacker
+debug:      inc $D020
+            jmp debug
++           cmp #%11101111              ; FIRE
+            bne ++
             ldx SelectorIndex
             ldy HandSelectorOffsets,x
+
             ; end of turn?
             lda #CHR_ENDTURN
             cmp (_CursorPos),y
@@ -940,9 +948,8 @@ NextPlayerRound:
             ; play card?
 +           lda #CHR_PLAY
             cmp (_CursorPos),y
-            bne +                       ; not possible
+            bne ++                      ; nope (not possible)
 ;}
-            ; cast card #X from hand
             ; TODO pick destination on table (LEFT/RIGHT and DOWN to cancel), and if required, pick target
             jsr CastPlayerCard
             ; redraw screen
@@ -957,7 +964,7 @@ NextPlayerRound:
             ldy EfQPtr
             bne -
 
-+           jmp .redraw
+++          jmp .redraw
 
 HandSelectorOffsets:
     !for i,0,MAX_HAND { !byte 10 + i * HAND_CARDWIDTH }
