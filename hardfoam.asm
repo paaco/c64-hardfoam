@@ -9,7 +9,7 @@
 ; TODO: decide on logo (adds at least 200 bytes packed)
 ; TODO: experimenting with _Draw vs specific functions showed 2x speedup (maybe more)
 
-!ifndef DEBUG {DEBUG=1}
+!ifndef DEBUG {DEBUG=0}
 !ifndef INTRO {INTRO=0}
 !if DEBUG=1 {
     !initmem $AA
@@ -100,9 +100,9 @@ SIZEOF_PD=64
 !addr InsertingCard=$56 ; card to show during DrawTable
 !addr EfQPtr=$57    ; next place in Effect Queue
 ; Effect interface
-!addr EfSource=$58  ; Effect source (Ptr to card on table or 0 in case of spell)
+!addr EfSource=$58  ; Effect source (Table-card or 0 in case of spell)
 !addr EfParam=$59   ; Parameter for effect (table or card to apply effect to)
-!addr FxCard=$5A    ; FX Ptr to card on table
+!addr FxCard=$5A    ; FX Table-card
 !addr FxScrOff=$5B  ; FX screen offset
 !addr FxPtr=$5C     ; FX current table offset
 !addr FxLoop=$5D    ; FX loop counter temp data used during FX
@@ -893,7 +893,7 @@ NextPlayerRound:
             lda Cards+CARD_LTSC,y
             and #%01000000              ; LTSSCCCC T=Type(0=Spell/1=Monster)
             beq +
-            lda PlayerData+PD_TABLE+SIZEOF_TD*(MAX_TABLE-1)+TD_CARD ; last card on table
+            lda PlayerData+PD_TABLE+SIZEOF_TD*(MAX_TABLE-1)+TD_CARD ; last table-card
             cmp #$FF                    ; still open?
             bne .no_energy              ; table full
 +           lda Cards+CARD_LTSC,y
@@ -924,12 +924,11 @@ NextPlayerRound:
             dec SelectorIndex
 +           cmp #%11111110              ; UP
             bne +
-            lda PlayerData+PD_TABLE+TD_CARD ; first card on table
+            lda PlayerData+PD_TABLE+TD_CARD ; first table-card
             cmp #$FF                    ; still open?
             beq ++                      ; no attack possible
-            ; TODO select attacker
-debug:      inc $D020
-            jmp debug
+            jsr DrawPlayerHand          ; remove cursor
+            jmp PlayerAttack
 +           cmp #%11101111              ; FIRE
             bne ++
             ldx SelectorIndex
@@ -940,7 +939,7 @@ debug:      inc $D020
             cmp (_CursorPos),y
             bne +                       ; nope
             ; end of turn
-            ldy #PlayerData+PD_TABLE
+            ldx #PlayerData+PD_TABLE
             jsr UntapTable
             jsr DrawPlayerTable
             jmp NextAIRound
@@ -952,6 +951,7 @@ debug:      inc $D020
 ;}
             ; TODO pick destination on table (LEFT/RIGHT and DOWN to cancel), and if required, pick target
             jsr CastPlayerCard
+RunPlayerAction:
             ; redraw screen
             +WaitVBL($83)
             jsr DrawCounters
@@ -968,6 +968,58 @@ debug:      inc $D020
 
 HandSelectorOffsets:
     !for i,0,MAX_HAND { !byte 10 + i * HAND_CARDWIDTH }
+
+; player selects attacker
+PlayerAttack:
+            ldy #<(SCREEN+15*40)
+            lda #>(SCREEN+15*40)
+            jsr SetCursorDrawCardBack
+            ldx #MAX_TABLE              ; TODO calculate actual #cards on table (this works, but needs to check for empty)
+            jsr SetMaxIndexX0
+.attack2:   ; draw text corresponding to target
+            jsr ClearLowerLines
+            ldx Index
+            ldy TableCardOffsets,x
+            ldx PlayerData+PD_TABLE+TD_CARD,y
+            cpx #$FF
+            beq +                       ; empty
+            ldy #<(SCREEN+21*40)
+            lda #>(SCREEN+21*40)
+            jsr SetCursorDrawCardText
++           ldy #<(SCREEN+15*40+(40-24)/2)
+            lda #>(SCREEN+15*40+(40-24)/2)
+            jsr SetCursor
+            jsr SelectCard              ; moves LEFT/RIGHT
+            lda Joystick                ; 111FRLDU
+            cmp #%11101111              ; FIRE
+            bne +
+            ; can this card attack?
+            ldy Index
+            ldx TableCardOffsets,y
+            lda PlayerData+PD_TABLE+TD_STATUS,x
+            and #STATUS_TAPPED
+            bne .attack2                ; tapped, can't attack
+            ; Attack
+            lda PlayerData+PD_TABLE+TD_STATUS,x
+            ora #STATUS_TAPPED
+            sta PlayerData+PD_TABLE+TD_STATUS,x
+            ; TODO if there are no AI Cards, directly attacks AI
+            txa
+            clc
+            adc #PlayerData+PD_TABLE
+            tax                         ; table-card
+            ldy #AIData                 ; player to attack
+            lda #E_INTERNAL_ATTACKPLAYER
+            jsr QueueEffect
+            jmp RunPlayerAction
+            ; TODO otherwise, select AI Card target to attack
+            ; attack: 1) queue effect: target attacks attacker (pushes to stack, becuase return damage goes last)
+            ;         2) qeueu effect: attacker attacks target
++           cmp #%11111101              ; DOWN
+            bne .attack2
+            lda SelectorIndexBackup     ; restore selector on lower screen
+            sta SelectorIndex
+            jmp .redraw
 
 
 ;-----------
@@ -1004,7 +1056,7 @@ NextAIRound:
             lda Cards+CARD_LTSC,y
             and #%01000000              ; LTSSCCCC T=Type(0=Spell/1=Monster)
             beq .ai_canuse2             ; spells can always be cast
-            lda AIData+PD_TABLE+SIZEOF_TD*(MAX_TABLE-1)+TD_CARD ; last card on table
+            lda AIData+PD_TABLE+SIZEOF_TD*(MAX_TABLE-1)+TD_CARD ; last table-card
             cmp #$FF                    ; still open?
             bne +                       ; table full
 .ai_canuse2:dec Tmp1
@@ -1029,7 +1081,7 @@ NextAIRound:
             ; TODO AI turn: if there are no opponent table cards left, attack player
 
             ; end of turn
-            ldy #AIData+PD_TABLE
+            ldx #AIData+PD_TABLE
             jsr UntapTable
             jsr DrawAITable
             jmp NextPlayerRound
@@ -1160,7 +1212,7 @@ CastAICard:
             jmp QueueEffect
 
 
-; put card Y on Table A at index X (0..MAX_TABLE-1) (clobbers A,X,Tmp1) returns card pointer in X
+; put card Y of Table A at index X (0..MAX_TABLE-1) (clobbers A,X,Tmp1) returns table-card in X
 ; Note that this blindly assumes there's room on the table!
 PutCardOnTable:
             pha
@@ -1196,21 +1248,20 @@ PutCardOnTable:
 TableCardOffsets:
             !for i,0,MAX_TABLE-1 { !byte i * SIZEOF_TD }
 
-; untap all cards on table in Y (clobbers A,X,Y)
+; untap all cards on table in X (clobbers A,X)
 UntapTable:
-            ldx #0
--           lda TD_CARD,y
+-           lda TD_CARD,x
             cmp #$FF
             beq +
-            lda TD_STATUS,y
+            lda TD_STATUS,x
             and #255-STATUS_TAPPED
-            sta TD_STATUS,y
-+           tya
+            sta TD_STATUS,x
++           txa
             clc
             adc #SIZEOF_TD
-            tay
-            inx
-            cpx #MAX_TABLE
+            tax
+            and #$7F                    ; make it work with both Players
+            cmp #PlayerData+PD_TABLE+MAX_TABLE*SIZEOF_TD
             bne -
             rts
 
@@ -1219,7 +1270,7 @@ UntapTable:
 ; EFFECTS
 ;----------------------------------------------------------------------------
 ; Effect interface
-; !addr EfSource=$58   ; Source of effect (Ptr to card on table or 0 in case of spell)
+; !addr EfSource=$58   ; Source of effect (Table-card or 0 in case of spell)
 ; !addr EfParam=$59    ; Parameter for effect (table or card to apply effect to)
 
 ; Queue effect A with Source X and Param Y (clobbers A,Y,EfTmp)
@@ -1256,7 +1307,6 @@ RunEffect:
             cmp #E_READY
             bne +
 ; untap Source (clobbers A,X)
-.Effect_Untap:
             ldx EfSource
             lda TD_STATUS,x
             and #255-STATUS_TAPPED
@@ -1267,7 +1317,6 @@ RunEffect:
 +           cmp #E_ALL_GAIN11
             bne +
 ; for each card on table (not EfSource) that matches the Suit of EfSource post effect TODO post effect Param
-.Effect_AllGain11:
             ldx EfSource
             ldy TD_CARD,x
             lda Cards+CARD_LTSC,y
@@ -1276,7 +1325,7 @@ RunEffect:
             txa
             and #$80
             ora #PlayerData+PD_TABLE
-            tax                         ; first card on table
+            tax                         ; first Table-cad
             cpx EfSource
             beq ++                      ; skip self
 -           ldy TD_CARD,x
@@ -1298,16 +1347,27 @@ RunEffect:
 --          rts
 
 +           cmp #E_INTERNAL_ALLGAIN11
-            bne -- ; done
+            bne +
 ; inc ATK and inc DEF of Source (clobbers X) TODO limit values
-.Effect_Gain11:
             ldx EfSource
             inc TD_ATK,x
             inc TD_DEF,x
             lda #FX_GAIN11
             jmp PlayFX
 
-; plays effect A on card on table X (clobbers A,X,Y,FxPtr,FxCard,FxScrOff,FxLoop)
++           cmp #E_INTERNAL_ATTACKPLAYER
+            bne -- ; done
+            ldx EfParam                 ; player
+            lda PD_LIFE,x
+            ldy EfSource                ; table-card
+            sec
+            sbc TD_ATK,y
+            bpl ++
+            lda #0
+++          sta PD_LIFE,x
+            rts
+
+; plays effect A on table-card X (clobbers A,X,Y,FxPtr,FxCard,FxScrOff,FxLoop)
 PlayFX:
             sta FxPtr
             stx FxCard
@@ -1456,7 +1516,7 @@ DrawTableInserting:
 ; CARD DRAWING
 ;----------------------------------------------------------------------------
 
-; draws card on table in Y at Cursor (clobbers A,X,Y)
+; draws table-card Y at Cursor (clobbers A,X,Y)
 ; - draws status border, no decoration and highlighted attack/defense
 DrawTableCard:
             ldx TD_CARD,y
@@ -1932,6 +1992,8 @@ TextData:
     T_END=*-TextData
     !byte M_END,0
 !if *-TextData >= $FF { !error "Out of TextData memory" }
+; Extra internal Effects. Don't have to map to a text string
+E_INTERNAL_ATTACKPLAYER=1
 
 ; Text macros, each ends with a byte >= $80
 MacroData:
