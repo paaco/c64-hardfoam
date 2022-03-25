@@ -998,23 +998,29 @@ PlayerAttack:
             ldx TableCardOffsets,y
             lda PlayerData+PD_TABLE+TD_STATUS,x
             and #STATUS_TAPPED
-            bne .attack2                ; tapped, can't attack
+            bne .attack2                ; tapped card can't attack
             ; Attack
             lda PlayerData+PD_TABLE+TD_STATUS,x
             ora #STATUS_TAPPED
             sta PlayerData+PD_TABLE+TD_STATUS,x
-            ; TODO if there are no AI Cards, directly attacks AI
             txa
             clc
             adc #PlayerData+PD_TABLE
-            tax                         ; table-card
+            tax                         ; X=table-card source attacker
+            lda AIData+PD_TABLE+TD_CARD ; first table-card
+            cmp #$FF                    ; still open?
+            bne .pickAItarget
+            ; If there are no AI Cards, attack AI player directly
             ldy #AIData                 ; player to attack
             lda #E_INTERNAL_ATTACKPLAYER
             jsr QueueEffect
             jmp RunPlayerAction
-            ; TODO otherwise, select AI Card target to attack
-            ; attack: 1) queue effect: target attacks attacker (pushes to stack, becuase return damage goes last)
-            ;         2) qeueu effect: attacker attacks target
+            ; otherwise, select AI Card target to attack
+.pickAItarget:
+            ldy #AIData+PD_TABLE        ; TODO first table-card for now but should be selected by user
+            lda #E_INTERNAL_ATTACK
+            jsr QueueEffect
+            jmp RunPlayerAction
 +           cmp #%11111101              ; DOWN
             bne .attack2
             lda SelectorIndexBackup     ; restore selector on lower screen
@@ -1336,7 +1342,7 @@ RunEffect:
             cmp Tmp3
             bne ++                      ; skip wrong suit
             lda #E_INTERNAL_ALLGAIN11
-            jsr QueueEffect             ; Queue effect A with Source X and Param Y (clobbers A,Y,EfTmp)
+            jsr QueueEffect
 ++          txa
             clc
             adc #SIZEOF_TD
@@ -1344,7 +1350,7 @@ RunEffect:
             and #$7F                    ; make it work with both Players
             cmp #PlayerData+PD_TABLE+MAX_TABLE*SIZEOF_TD
             bne -
---          rts
+            rts
 
 +           cmp #E_INTERNAL_ALLGAIN11
             bne +
@@ -1356,7 +1362,8 @@ RunEffect:
             jmp PlayFX
 
 +           cmp #E_INTERNAL_ATTACKPLAYER
-            bne -- ; done
+            bne +
+; subtract Source ATK from Player's Life, clamping at 0
             ldx EfParam                 ; player
             lda PD_LIFE,x
             ldy EfSource                ; table-card
@@ -1365,7 +1372,35 @@ RunEffect:
             bpl ++
             lda #0
 ++          sta PD_LIFE,x
-            rts
+.effectend  rts
+
++           cmp #E_INTERNAL_ATTACK
+            bne +
+; push counter attack and attack
+            ldx EfParam
+            ldy EfSource
+            lda #E_INTERNAL_ATTACK2
+            jsr QueueEffect
+            ldx EfSource
+            ldy EfParam
+            lda #E_INTERNAL_ATTACK2
+            jmp QueueEffect
+
++           cmp #E_INTERNAL_ATTACK2
+            bne .effectend
+; subtract Source ATK from Param (table-card)'s DEF, clamping at 0
+            ldx EfParam
+            lda TD_DEF,x
+            ldy EfSource
+            sec
+            sbc TD_ATK,y
+            bpl ++
+            lda #0
+++          sta TD_DEF,x
+            lda TD_ATK,y
+            beq .effectend
+            lda #FX_HURT
+            jmp PlayFX
 
 ; plays effect A on table-card X (clobbers A,X,Y,FxPtr,FxCard,FxScrOff,FxLoop)
 PlayFX:
@@ -1374,7 +1409,7 @@ PlayFX:
             ; set cursor for ColorCard
             lda FXOffsets-(PlayerData+PD_TABLE),x
             sta FxScrOff
-            ; set cursor for DrawTableCard
+            ; set cursor for DrawTableCard TODO redraw AI Card as well
             ldy #<(SCREEN+15*40+(40-24)/2-8)
             lda #>(SCREEN+15*40+(40-24)/2-8)
             jsr SetCursor
@@ -1994,6 +2029,8 @@ TextData:
 !if *-TextData >= $FF { !error "Out of TextData memory" }
 ; Extra internal Effects. Don't have to map to a text string
 E_INTERNAL_ATTACKPLAYER=1
+E_INTERNAL_ATTACK=3
+E_INTERNAL_ATTACK2=4
 
 ; Text macros, each ends with a byte >= $80
 MacroData:
@@ -2074,10 +2111,15 @@ FxData:
     !byte 10,WHITE
     !byte 0
     FX_GAIN11=*-FxData
-    !byte 30,GREEN
+    !byte 10,GREEN
     !byte 5,$FF
-    !byte 30,WHITE
+    !byte 10,WHITE
     FX_DROPCARD=*-FxData
+    !byte 0
+    FX_HURT=*-FxData
+    !byte 1,LIGHT_RED
+    !byte 1,PURPLE
+    !byte 8,RED
     !byte 0
 
 
