@@ -1,7 +1,7 @@
 ; HARD FOAM - a 4K compressed card game
 ; Developed for the https://ausretrogamer.com/2022-reset64-4kb-craptastic-game-competition
 
-; TODO: turn: attack with table cards (pick your own order, attack not required)
+; TODO: death checks on mobs and players
 ; TODO: AI turn: with each table card, attack random table card
 ; TODO: AI turn: if there are no opponent table cards left, attack player
 ; TODO: your turn/opponent's turn animation (adds at least 100 bytes packed)
@@ -66,7 +66,7 @@ MAX_EFFECT_QUEUE=20
 !addr ZP_RNG_HIGH = $09
 !addr Tmp1=$0A
 !addr Tmp2=$0B
-!addr EfTmp=$0B ; reuse Tmp2
+!addr EfQTmp=$0B ; reuse Tmp2
 !addr Tmp3=$0C
 !addr TmpText=$0D
 ;!addr Suit=$0E
@@ -273,35 +273,35 @@ DrawTextX:
 SuitTextData:
     !byte M_GOBLIN,M_POLYSTYRENE,M_CANDY,M_SOAP
 
-; clears the two lower lines (clobbers A,Y)
+; clears the two lower lines (clobbers A,X)
 ClearLowerLines: ; 14 bytes
             lda #CHR_SPACE
-            ldy #38
--           sta SCREEN+21*40,y
-            sta SCREEN+22*40,y
-            dey
+            ldx #38
+-           sta SCREEN+21*40,x
+            sta SCREEN+22*40,x
+            dex
             bpl -
             rts
 
-; clears two lines upper lines (clobbers A,Y)
+; clears two lines upper lines (clobbers A,X)
 ClearUpperLines: ; 14 bytes
             lda #CHR_SPACE
-            ldy #38
--           sta SCREEN+2*40,y
-            sta SCREEN+3*40,y
-            dey
+            ldx #38
+-           sta SCREEN+2*40,x
+            sta SCREEN+3*40,x
+            dex
             bpl -
             rts
 
-; wipes the top and bottom of the screen completely (clobbers A,Y)
+; wipes the top and bottom of the screen completely (clobbers A,X)
 ClearAll: ; 20 bytes
             lda #CHR_SPACE
-            ldy #5*40
--           sta SCREEN-1,y
-            sta SCREEN-1+5*40,y
-            sta SCREEN-1+15*40,y
-            sta SCREEN-1+20*40,y
-            dey
+            ldx #5*40
+-           sta SCREEN-1,x
+            sta SCREEN-1+5*40,x
+            sta SCREEN-1+15*40,x
+            sta SCREEN-1+20*40,x
+            dex
             bne -
             rts
 
@@ -974,13 +974,13 @@ PlayerAttack:
             ldy #<(SCREEN+15*40)
             lda #>(SCREEN+15*40)
             jsr SetCursorDrawCardBack
-            ldx #MAX_TABLE              ; TODO calculate actual #cards on table (this works, but needs to check for empty)
+.attack3:   ldx #MAX_TABLE              ; TODO calculate actual #cards on table (this works, but needs to check for empty)
             jsr SetMaxIndexX0
 .attack2:   ; draw text corresponding to target
             jsr ClearLowerLines
             ldx Index
-            ldy TableCardOffsets,x
-            ldx PlayerData+PD_TABLE+TD_CARD,y
+            ldy PlayerTableCardOffsets,x
+            ldx TD_CARD,y
             cpx #$FF
             beq +                       ; empty
             ldy #<(SCREEN+21*40)
@@ -995,29 +995,34 @@ PlayerAttack:
             bne +
             ; can this card attack?
             ldy Index
-            ldx TableCardOffsets,y
-            lda PlayerData+PD_TABLE+TD_STATUS,x
+            ldx PlayerTableCardOffsets,y; X=table-card source attacker
+            lda TD_STATUS,x
             and #STATUS_TAPPED
             bne .attack2                ; tapped card can't attack
             ; Attack
-            lda PlayerData+PD_TABLE+TD_STATUS,x
-            ora #STATUS_TAPPED
-            sta PlayerData+PD_TABLE+TD_STATUS,x
-            txa
-            clc
-            adc #PlayerData+PD_TABLE
-            tax                         ; X=table-card source attacker
-            lda AIData+PD_TABLE+TD_CARD ; first table-card
+            lda AIData+PD_TABLE+TD_CARD ; is there a table-card?
             cmp #$FF                    ; still open?
             bne .pickAItarget
-            ; If there are no AI Cards, attack AI player directly
-            ldy #AIData                 ; player to attack
+            ; there are no AI cards, so attack AI player directly
+            lda TD_STATUS,x
+            ora #STATUS_TAPPED
+            sta TD_STATUS,x             ; X=table-card source attacker
+            ldy #AIData                 ; Y=player to attack
             lda #E_INTERNAL_ATTACKPLAYER
             jsr QueueEffect
             jmp RunPlayerAction
             ; otherwise, select AI Card target to attack
 .pickAItarget:
-            ldy #AIData+PD_TABLE        ; TODO first table-card for now but should be selected by user
+            txa
+            pha                         ; backup X
+            jsr PlayerPickTarget
+            pla
+            tax                         ; restore X
+            cpy #0
+            beq .attack3                ; aborted
+            lda TD_STATUS,x
+            ora #STATUS_TAPPED
+            sta TD_STATUS,x             ; X=table-card source attacker
             lda #E_INTERNAL_ATTACK
             jsr QueueEffect
             jmp RunPlayerAction
@@ -1026,6 +1031,38 @@ PlayerAttack:
             lda SelectorIndexBackup     ; restore selector on lower screen
             sta SelectorIndex
             jmp .redraw
+
+; player picks target from AI cards <> empty! (clobbers A,X,Y) returns Y=selected table-card or 0 if none
+PlayerPickTarget: ; TODO also usable to just browse AI cards
+            ldx #MAX_TABLE              ; TODO calculate actual #cards on table (this works, but needs to check for empty)
+            jsr SetMaxIndexX0
+.pick2:     jsr ClearUpperLines
+            ldx Index
+            ldy AITableCardOffsets,x
+            ldx TD_CARD,y
+            cpx #$FF
+            beq +                       ; empty
+            ldy #<(SCREEN+2*40)
+            lda #>(SCREEN+2*40)
+            jsr SetCursorDrawCardText
++           ldy #<(SCREEN+4*40+(40-24)/2)
+            lda #>(SCREEN+4*40+(40-24)/2)
+            jsr SetCursor
+            jsr SelectCard              ; moves LEFT/RIGHT
+            lda Joystick                ; 111FRLDU
+            cmp #%11101111              ; FIRE
+            bne +
+            ; target confirmed
+            ldx Index
+            ldy AITableCardOffsets,x    ; selected table-card in Y
+            lda TD_CARD,y
+            cmp #$FF
+            beq .pick2                  ; empty, retry
+            jmp ClearUpperLines
++           cmp #%11111101              ; DOWN
+            bne .pick2
+            ldy #0                      ; return 0 in Y in case of abort
+            jmp ClearUpperLines
 
 
 ;-----------
@@ -1181,8 +1218,7 @@ CastPlayerCard:
             and #%01000000              ; LTSSCCCC T=Type(0=Spell/1=Monster)
             beq .spell
             ; put monster card on table
-            lda #PlayerData+PD_TABLE    ; table
-            ldx #0                      ; card index on table
+            ldx #PlayerData+PD_TABLE    ; table-card space on table
             jsr PutCardOnTable
             ; monster: Y=card# / X=PlayerData+PD_TABLE+card#*SIZEOF_TD("self") / A=1 (STATUS_TAPPED)
             ; spell:   Y=card# / X=PlayerData / A=0
@@ -1209,8 +1245,7 @@ CastAICard:
             and #%01000000              ; LTSSCCCC T=Type(0=Spell/1=Monster)
             beq .spell2
             ; put monster card on table
-            lda #AIData+PD_TABLE        ; table
-            ldx #0                      ; card index on table
+            ldx #AIData+PD_TABLE        ; table-card space on table
             jsr PutCardOnTable
             ; monster: Y=card# / X=AIData+PD_TABLE+card#*SIZEOF_TD("self") / A=1 (STATUS_TAPPED)
             ; spell:   Y=card# / X=AIData / A=0
@@ -1218,17 +1253,14 @@ CastAICard:
             jmp QueueEffect
 
 
-; put card Y of Table A at index X (0..MAX_TABLE-1) (clobbers A,X,Tmp1) returns table-card in X
+; insert card Y on table-card X (clobbers A,Tmp1)
 ; Note that this blindly assumes there's room on the table!
 PutCardOnTable:
-            pha
-            clc
-            adc TableCardOffsets,x      ; => A is pointer to card on Table (AI/PlayerData+PD_TABLE+X*SIZEOF_TD)
-            sta Tmp1
-            pla
+            stx Tmp1
             ; make room for card on table
-            ;clc
-            adc #(MAX_TABLE-1)*SIZEOF_TD-1 ; last byte of 2nd last card
+            txa
+            and #$80                    ; make it work with both Players
+            ora #PlayerData+PD_TABLE+(MAX_TABLE-1)*SIZEOF_TD-1 ; last byte of 2nd last card
             tax
 -           lda TD_CARD,x
             sta TD_CARD+SIZEOF_TD,x
@@ -1251,8 +1283,10 @@ PutCardOnTable:
             sta TD_STATUS,x             ; status bits: 1=tapped, 2=shielded
             rts
 
-TableCardOffsets:
-            !for i,0,MAX_TABLE-1 { !byte i * SIZEOF_TD }
+PlayerTableCardOffsets:
+            !for i,0,MAX_TABLE-1 { !byte PlayerData+PD_TABLE + i * SIZEOF_TD }
+AITableCardOffsets:
+            !for i,0,MAX_TABLE-1 { !byte AIData+PD_TABLE + i * SIZEOF_TD }
 
 ; untap all cards on table in X (clobbers A,X)
 UntapTable:
@@ -1279,9 +1313,9 @@ UntapTable:
 ; !addr EfSource=$58   ; Source of effect (Table-card or 0 in case of spell)
 ; !addr EfParam=$59    ; Parameter for effect (table or card to apply effect to)
 
-; Queue effect A with Source X and Param Y (clobbers A,Y,EfTmp)
+; Queue effect A with Source X and Param Y (clobbers A,Y,EfQTmp)
 QueueEffect:
-            sty EfTmp
+            sty EfQTmp
             ldy EfQPtr
             inc EfQPtr
 !if DEBUG=1 {
@@ -1293,7 +1327,7 @@ QueueEffect:
             sta EQueueEffect,y
             txa
             sta EQueueSource,y
-            lda EfTmp
+            lda EfQTmp
             sta EQueueParam,y
 .stealrts3: rts
 
