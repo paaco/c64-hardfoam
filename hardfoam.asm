@@ -1,7 +1,10 @@
 ; HARD FOAM - a 4K compressed card game
 ; Developed for the https://ausretrogamer.com/2022-reset64-4kb-craptastic-game-competition
 
-; TODO: death checks on mobs and players
+; TODO: death check on mobs
+; TODO: death check on players
+; TODO: on play select place on table
+; TODO: on play select target on table (own or opponent)
 ; TODO: AI turn: with each table card, attack random table card
 ; TODO: AI turn: if there are no opponent table cards left, attack player
 ; TODO: your turn/opponent's turn animation (adds at least 100 bytes packed)
@@ -79,7 +82,7 @@ MAX_EFFECT_QUEUE=20
     PD_MAXENERGY=3  ; $30 .. $39
     PD_REMAIN=4     ; DECKSIZE-1 .. 0
     PD_HAND=5       ; 7 bytes card# or $FF=no card (left filled)
-    MAX_HAND=6      ; max #cards in hand
+     MAX_HAND=6     ; max #cards in hand
     PD_TABLE=12     ; 20 bytes 5*4 bytes (card#,atk,def,status)
       TD_CARD=0     ; card# $FF=no card
       TD_ATK=1      ; attack
@@ -88,7 +91,7 @@ MAX_EFFECT_QUEUE=20
       STATUS_TAPPED=1
       STATUS_SHIELDED=2
       SIZEOF_TD=4
-    MAX_TABLE=5     ; max #cards on table
+     MAX_TABLE=5    ; max #cards on table
     PD_DECK=32      ; 32 bytes (card#)
 SIZEOF_PD=64
 !addr Index=$50     ; loop/selection index
@@ -837,10 +840,6 @@ NextPlayerRound:
             jsr Energize
             jsr DrawCounters
 
-            ; TODO: start of turn: select first possible hand card
-            ; TODO: if there is none, select first table card
-            ; TODO: if there is none, select END symbol
-
             ; select from hand
             lda #0                      ; 0..MAX_HAND-1=card, MAX_HAND=END
             sta SelectorIndex
@@ -864,10 +863,10 @@ NextPlayerRound:
             jsr DrawCardBack
             jmp ++
 +           txa
-            pha
+            pha                         ; backup X
             jsr DrawCard
             pla
-            tax
+            tax                         ; restore X
             ldy #<(SCREEN+21*40)
             lda #>(SCREEN+21*40)
             jsr SetCursorDrawCardText
@@ -1002,28 +1001,27 @@ PlayerAttack:
             ; Attack
             lda AIData+PD_TABLE+TD_CARD ; is there a table-card?
             cmp #$FF                    ; still open?
-            bne .pickAItarget
+            bne .target
             ; there are no AI cards, so attack AI player directly
             lda TD_STATUS,x
             ora #STATUS_TAPPED
             sta TD_STATUS,x             ; X=table-card source attacker
             ldy #AIData                 ; Y=player to attack
-            lda #E_INTERNAL_ATTACKPLAYER
+            lda #E_INT_ATTACKPLAYER
             jsr QueueEffect
             jmp RunPlayerAction
             ; otherwise, select AI Card target to attack
-.pickAItarget:
-            txa
+.target:    txa
             pha                         ; backup X
             jsr PlayerPickTarget
             pla
             tax                         ; restore X
-            cpy #0
+            cpy #0                      ; Y=card to attack
             beq .attack3                ; aborted
             lda TD_STATUS,x
             ora #STATUS_TAPPED
             sta TD_STATUS,x             ; X=table-card source attacker
-            lda #E_INTERNAL_ATTACK
+            lda #E_INT_ATTACK
             jsr QueueEffect
             jmp RunPlayerAction
 +           cmp #%11111101              ; DOWN
@@ -1032,7 +1030,7 @@ PlayerAttack:
             sta SelectorIndex
             jmp .redraw
 
-; player picks target from AI cards <> empty! (clobbers A,X,Y) returns Y=selected table-card or 0 if none
+; player picks target from AI cards <> empty! (clobbers A,X,Y,Index) returns Y=selected table-card or 0 if none
 PlayerPickTarget: ; TODO also usable to just browse AI cards
             ldx #MAX_TABLE              ; TODO calculate actual #cards on table (this works, but needs to check for empty)
             jsr SetMaxIndexX0
@@ -1210,18 +1208,18 @@ CastPlayerCard:
             bne -                       ; "always"
 +           lda #$FF
             sta PlayerData+PD_HAND,x    ; wipe last card
+            ldx #PlayerData
             lda Cards+CARD_LTSC,y
             and #%00001111              ; LTSSCCCC
-            ldx #PlayerData
             jsr DecreaseEnergy
             lda Cards+CARD_LTSC,y
             and #%01000000              ; LTSSCCCC T=Type(0=Spell/1=Monster)
             beq .spell
             ; put monster card on table
-            ldx #PlayerData+PD_TABLE    ; table-card space on table
+            ldx #PlayerData+PD_TABLE    ; table-card location on table
             jsr PutCardOnTable
-            ; monster: Y=card# / X=PlayerData+PD_TABLE+card#*SIZEOF_TD("self") / A=1 (STATUS_TAPPED)
-            ; spell:   Y=card# / X=PlayerData / A=0
+            lda #E_INT_DROPCARD         ; drop card Y at X (table-card or Player)
+            jmp QueueEffect
 .spell:     lda Cards+CARD_EFFECT,y
             jmp QueueEffect
 
@@ -1237,9 +1235,9 @@ CastAICard:
             bne -                       ; "always"
 +           lda #$FF
             sta AIData+PD_HAND,x    ; wipe last card
+            ldx #AIData
             lda Cards+CARD_LTSC,y
             and #%00001111              ; LTSSCCCC
-            ldx #AIData
             jsr DecreaseEnergy
             lda Cards+CARD_LTSC,y
             and #%01000000              ; LTSSCCCC T=Type(0=Spell/1=Monster)
@@ -1247,11 +1245,10 @@ CastAICard:
             ; put monster card on table
             ldx #AIData+PD_TABLE        ; table-card space on table
             jsr PutCardOnTable
-            ; monster: Y=card# / X=AIData+PD_TABLE+card#*SIZEOF_TD("self") / A=1 (STATUS_TAPPED)
-            ; spell:   Y=card# / X=AIData / A=0
+            lda #E_INT_DROPCARD
+            jmp QueueEffect
 .spell2:    lda Cards+CARD_EFFECT,y
             jmp QueueEffect
-
 
 ; insert card Y on table-card X (clobbers A,Tmp1)
 ; Note that this blindly assumes there's room on the table!
@@ -1309,9 +1306,6 @@ UntapTable:
 ;----------------------------------------------------------------------------
 ; EFFECTS
 ;----------------------------------------------------------------------------
-; Effect interface
-; !addr EfSource=$58   ; Source of effect (Table-card or 0 in case of spell)
-; !addr EfParam=$59    ; Parameter for effect (table or card to apply effect to)
 
 ; Queue effect A with Source X and Param Y (clobbers A,Y,EfQTmp)
 QueueEffect:
@@ -1346,7 +1340,8 @@ RunEffect:
             ; hard coded jump list
             cmp #E_READY
             bne +
-; untap Source (clobbers A,X)
+; untap Source
+Effect_Untap:
             ldx EfSource
             lda TD_STATUS,x
             and #255-STATUS_TAPPED
@@ -1356,7 +1351,11 @@ RunEffect:
 
 +           cmp #E_ALL_GAIN11
             bne +
-; for each card on table (not EfSource) that matches the Suit of EfSource post effect TODO post effect Param
+Effect_AuraAllGain11:
+            lda #E_INT_ALLGAIN11
+; for each card on table (not Source) that matches Suit of Source post effect A
+Effect_SuitAura:
+            sta EfParam
             ldx EfSource
             ldy TD_CARD,x
             lda Cards+CARD_LTSC,y
@@ -1375,7 +1374,7 @@ RunEffect:
             and #%00110000              ; LTSSCCCC SS=Suit(0,1,2,3)
             cmp Tmp3
             bne ++                      ; skip wrong suit
-            lda #E_INTERNAL_ALLGAIN11
+            lda EfParam
             jsr QueueEffect
 ++          txa
             clc
@@ -1386,18 +1385,20 @@ RunEffect:
             bne -
             rts
 
-+           cmp #E_INTERNAL_ALLGAIN11
++           cmp #E_INT_ALLGAIN11
             bne +
-; inc ATK and inc DEF of Source (clobbers X) TODO limit values
+; inc ATK and inc DEF of Source TODO limit values
+Effect_Gain11:
             ldx EfSource
             inc TD_ATK,x
             inc TD_DEF,x
             lda #FX_GAIN11
             jmp PlayFX
 
-+           cmp #E_INTERNAL_ATTACKPLAYER
++           cmp #E_INT_ATTACKPLAYER
             bne +
 ; subtract Source ATK from Player's Life, clamping at 0
+Effect_AttackPlayer:
             ldx EfParam                 ; player
             lda PD_LIFE,x
             ldy EfSource                ; table-card
@@ -1408,21 +1409,24 @@ RunEffect:
 ++          sta PD_LIFE,x
 .effectend  rts
 
-+           cmp #E_INTERNAL_ATTACK
++           cmp #E_INT_ATTACK
             bne +
-; push counter attack and attack
+; push counter attack (Param attacks Source) and attack (Source attacks Param)
+;  note: this causes attacks to be executed "simultaneously" but visually Source goes first
+Effect_Attack:
             ldx EfParam
             ldy EfSource
-            lda #E_INTERNAL_ATTACK2
+            lda #E_INT_ATTACK2
             jsr QueueEffect
             ldx EfSource
             ldy EfParam
-            lda #E_INTERNAL_ATTACK2
+            lda #E_INT_ATTACK2
             jmp QueueEffect
 
-+           cmp #E_INTERNAL_ATTACK2
-            bne .effectend
++           cmp #E_INT_ATTACK2
+            bne +
 ; subtract Source ATK from Param (table-card)'s DEF, clamping at 0
+Effect_AttackCard:
             ldx EfParam
             lda TD_DEF,x
             ldy EfSource
@@ -1436,6 +1440,22 @@ RunEffect:
             lda #FX_HURT
             jmp PlayFX
 
++           cmp #E_INT_DROPCARD
+            bne .effectend
+; Puts card Param at Source onto table and queues its effect
+Effect_DropCard:
+            ldx EfSource                ; table-card
+            ldy EfParam                 ; card#
+            lda Cards+CARD_EFFECT,y
+            jsr QueueEffect
+            lda #FX_DROPCARD
+            jmp PlayFX
+
+
+;----------------------------------------------------------------------------
+; VISUAL FX PLAYER
+;----------------------------------------------------------------------------
+
 ; plays effect A on table-card X (clobbers A,X,Y,FxPtr,FxCard,FxScrOff,FxLoop)
 PlayFX:
             sta FxPtr
@@ -1443,10 +1463,15 @@ PlayFX:
             ; set cursor for ColorCard
             lda FXOffsets-(PlayerData+PD_TABLE),x
             sta FxScrOff
-            ; set cursor for DrawTableCard TODO redraw AI Card as well
+            bmi .playfxai
+            ; set cursor for DrawTableCard for Player
             ldy #<(SCREEN+15*40+(40-24)/2-8)
             lda #>(SCREEN+15*40+(40-24)/2-8)
-            jsr SetCursor
+            bne +                       ; always
+            ; set cursor for DrawTableCard for AI
+.playfxai:  ldy #<(SCREEN+4*40+(40-24)/2-8)
+            lda #>(SCREEN+4*40+(40-24)/2-8)
++           jsr SetCursor
             lda FXOffsets-(PlayerData+PD_TABLE),x
             and #$7F
             jsr AddToCursor
@@ -2046,7 +2071,7 @@ TextData:
     N_WANNABE=*-TextData
     !byte M_SUIT,M_WANNABE,0
     E_ALL_GAIN11=*-TextData ; All other cards of the same suit gain +1/+1
-    E_INTERNAL_ALLGAIN11=*-TextData+1
+    E_INT_ALLGAIN11=*-TextData+1
     !byte M_ALL,M_SUIT,M_GAIN11,0
     E_READY=*-TextData ; Card has no summoning sickness
     !byte M_READY,0
@@ -2061,10 +2086,11 @@ TextData:
     T_END=*-TextData
     !byte M_END,0
 !if *-TextData >= $FF { !error "Out of TextData memory" }
-; Extra internal Effects. Don't have to map to a text string
-E_INTERNAL_ATTACKPLAYER=1
-E_INTERNAL_ATTACK=3
-E_INTERNAL_ATTACK2=4
+; Additional effects - make sure they don't map to any string used as CARD_EFFECT
+E_INT_ATTACKPLAYER=3
+E_INT_ATTACK=4
+E_INT_ATTACK2=5
+E_INT_DROPCARD=6
 
 ; Text macros, each ends with a byte >= $80
 MacroData:
@@ -2148,9 +2174,13 @@ FxData:
     !byte 10,GREEN
     !byte 5,$FF
     !byte 10,WHITE
+    !byte 0
     FX_DROPCARD=*-FxData
+    !byte 1,$FF
+    !byte 50,PURPLE ; DEBUG
     !byte 0
     FX_HURT=*-FxData
+    !byte 1,$FF
     !byte 1,LIGHT_RED
     !byte 1,PURPLE
     !byte 8,RED
