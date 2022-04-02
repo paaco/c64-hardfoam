@@ -1,8 +1,8 @@
 ; HARD FOAM - a 4K compressed card game
 ; Developed for the https://ausretrogamer.com/2022-reset64-4kb-craptastic-game-competition
 
-; TODO: death check on mobs
-; TODO: death check on players
+; TODO: cleanup table after deaths
+; TODO: death check on players (win/lose)
 ; TODO: on play select place on table
 ; TODO: on play select target on table (own or opponent)
 ; TODO: AI turn: with each table card, attack random table card
@@ -957,11 +957,14 @@ RunPlayerAction:
             jsr DrawPlayerHand
             jsr DrawPlayerTable
             ; run all queued effects
--           jsr RunEffect
+.effects1:  jsr RunEffect
             jsr DrawCounters
             jsr DrawPlayerTable ; TODO should this be part of RunEffect somehow?
             ldy EfQPtr
-            bne -
+            bne .effects1
+            jsr QueueDeaths
+            ldy EfQPtr
+            bne .effects1
 
 ++          jmp .redraw
 
@@ -1108,7 +1111,15 @@ NextAIRound:
             jsr DrawCounters
             jsr DrawAIHand
             jsr DrawAITable
-            ; TODO run effects
+            ; run all queued effects
+.effects2:  jsr RunEffect
+            jsr DrawCounters
+            jsr DrawAITable ; TODO should this be part of RunEffect somehow?
+            ldy EfQPtr
+            bne .effects2
+            jsr QueueDeaths
+            ldy EfQPtr
+            bne .effects2
             jmp .ai_castmore
 +           inx
             cpx #MAX_HAND
@@ -1302,6 +1313,28 @@ UntapTable:
             bne -
             rts
 
+; check cards and players for health=0 and queue death effect
+QueueDeaths:
+            ldx #PlayerData+PD_TABLE
+            jsr .qdeaths
+            ldx #AIData+PD_TABLE
+.qdeaths:   lda TD_CARD,x
+            cmp #$FF
+            beq +
+            lda TD_DEF,x
+            bne +
+            ; card is dead
+            lda #E_INT_DEADCARD
+            jsr QueueEffect
++           txa
+            clc
+            adc #SIZEOF_TD
+            tax
+            and #$7F                    ; make it work with both Players
+            cmp #PlayerData+PD_TABLE+MAX_TABLE*SIZEOF_TD
+            bne .qdeaths
+            rts
+
 
 ;----------------------------------------------------------------------------
 ; EFFECTS
@@ -1441,7 +1474,7 @@ Effect_AttackCard:
             jmp PlayFX
 
 +           cmp #E_INT_DROPCARD
-            bne .effectend
+            bne +
 ; Puts card Param at Source onto table and queues its effect
 Effect_DropCard:
             ldx EfSource                ; table-card
@@ -1450,6 +1483,18 @@ Effect_DropCard:
             jsr QueueEffect
             lda #FX_DROPCARD
             jmp PlayFX
+
++           cmp #E_INT_DEADCARD
+            bne .effectend
+; Puts card Param at Source onto table and queues its effect
+Effect_DeadCard:
+            ldx EfSource                ; table-card
+            lda #FX_DEATH
+            jsr PlayFX
+            ldx EfSource
+            lda #$FF
+            sta TD_CARD,x               ; wipe card
+            rts
 
 
 ;----------------------------------------------------------------------------
@@ -2091,6 +2136,7 @@ E_INT_ATTACKPLAYER=3
 E_INT_ATTACK=4
 E_INT_ATTACK2=5
 E_INT_DROPCARD=6
+E_INT_DEADCARD=7
 
 ; Text macros, each ends with a byte >= $80
 MacroData:
@@ -2184,6 +2230,9 @@ FxData:
     !byte 1,LIGHT_RED
     !byte 1,PURPLE
     !byte 8,RED
+    !byte 0
+    FX_DEATH=*-FxData
+    !byte 50,BLACK ; DEBUG
     !byte 0
 
 
