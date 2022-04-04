@@ -1,7 +1,6 @@
 ; HARD FOAM - a 4K compressed card game
 ; Developed for the https://ausretrogamer.com/2022-reset64-4kb-craptastic-game-competition
 
-; TODO: cleanup table after deaths
 ; TODO: death check on players (win/lose)
 ; TODO: on play select place on table
 ; TODO: on play select target on table (own or opponent)
@@ -963,8 +962,12 @@ RunPlayerAction:
             ldy EfQPtr
             bne .effects1
             jsr QueueDeaths
+.effects2:  jsr RunEffect
             ldy EfQPtr
-            bne .effects1
+            bne .effects2
+            jsr CleanupDeaths
+            jsr DrawPlayerTable
+            jsr DrawAITable
 
 ++          jmp .redraw
 
@@ -1112,14 +1115,18 @@ NextAIRound:
             jsr DrawAIHand
             jsr DrawAITable
             ; run all queued effects
-.effects2:  jsr RunEffect
+.effects3:  jsr RunEffect
             jsr DrawCounters
             jsr DrawAITable ; TODO should this be part of RunEffect somehow?
             ldy EfQPtr
-            bne .effects2
+            bne .effects3
             jsr QueueDeaths
+.effects4:  jsr RunEffect
             ldy EfQPtr
-            bne .effects2
+            bne .effects4
+            jsr CleanupDeaths
+            jsr DrawPlayerTable
+            jsr DrawAITable
             jmp .ai_castmore
 +           inx
             cpx #MAX_HAND
@@ -1245,7 +1252,7 @@ CastAICard:
             inx
             bne -                       ; "always"
 +           lda #$FF
-            sta AIData+PD_HAND,x    ; wipe last card
+            sta AIData+PD_HAND,x        ; wipe last card
             ldx #AIData
             lda Cards+CARD_LTSC,y
             and #%00001111              ; LTSSCCCC
@@ -1313,7 +1320,7 @@ UntapTable:
             bne -
             rts
 
-; check cards and players for health=0 and queue death effect
+; check cards and players for health=0 and queue death effect (clobbers A,X)
 QueueDeaths:
             ldx #PlayerData+PD_TABLE
             jsr .qdeaths
@@ -1333,6 +1340,52 @@ QueueDeaths:
             and #$7F                    ; make it work with both Players
             cmp #PlayerData+PD_TABLE+MAX_TABLE*SIZEOF_TD
             bne .qdeaths
+            rts
+
+; clean out cards with health=0 of table X (clobbers A,X,Y)
+CleanupDeaths:
+            ldx #PlayerData+PD_TABLE
+            jsr .cleanup
+            ldx #AIData+PD_TABLE
+.cleanup:   txa                         ; X=source
+            tay                         ; Y=dest
+-           lda TD_CARD,x
+            cmp #$FF
+            beq +                       ; always copy empty card
+            lda TD_DEF,x
+            beq .clskip
+            ; copy card
+            lda TD_CARD,x
++           sta TD_CARD,y
+            iny
+            lda TD_CARD+1,x
+            sta TD_CARD,y
+            iny
+            lda TD_CARD+2,x
+            sta TD_CARD,y
+            iny
+            lda TD_CARD+3,x
+            sta TD_CARD,y
+            iny
+.clskip:    txa
+            clc
+            adc #SIZEOF_TD
+            tax                         ; X=X+SIZEOF_TD
+            and #$7F                    ; make it work with both Players
+            cmp #PlayerData+PD_TABLE+MAX_TABLE*SIZEOF_TD
+            bne -
+            ; fill remainder
+            tya
+            ldy #$FF
+            bne ++                      ; always
+-           sty TD_CARD,x
+            txa
+            clc
+            adc #SIZEOF_TD
+++          tax                         ; X=X+SIZEOF_TD
+            and #$7F                    ; make it work with both Players
+            cmp #PlayerData+PD_TABLE+MAX_TABLE*SIZEOF_TD
+            bne -
             rts
 
 
@@ -1490,11 +1543,7 @@ Effect_DropCard:
 Effect_DeadCard:
             ldx EfSource                ; table-card
             lda #FX_DEATH
-            jsr PlayFX
-            ldx EfSource
-            lda #$FF
-            sta TD_CARD,x               ; wipe card
-            rts
+            jmp PlayFX
 
 
 ;----------------------------------------------------------------------------
