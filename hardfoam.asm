@@ -5,7 +5,6 @@
 ; TODO: on play select target on table (own or opponent)
 ; TODO: AI turn: with each table card, attack random table card
 ; TODO: AI turn: if there are no opponent table cards left, attack player
-; TODO: your turn/opponent's turn animation (adds at least 100 bytes packed)
 ; TODO: 15+1 free deck selector
 ; TODO: decide on logo (adds at least 200 bytes packed)
 ; TODO: experimenting with _Draw vs specific functions showed 2x speedup (maybe more)
@@ -832,11 +831,21 @@ Start:
 NextPlayerRound:
             ; pull next card
             jsr PullPlayerDeckCard
+            jsr DrawPlayerHand
 
             ; restore energy for player
             ldx #PlayerData
             jsr Energize
             jsr DrawCounters
+
+            ldy #S_YOURTURN
+            jsr PlayScroll
+            ldy #50
+-           +WaitVBL($43)
+            dey
+            bne -
+            ldy #S_EMPTY
+            jsr PlayScroll
 
             ; select from hand
             lda #0                      ; 0..MAX_HAND-1=card, MAX_HAND=END
@@ -1090,6 +1099,15 @@ NextAIRound:
             ldx #AIData
             jsr Energize
             jsr DrawCounters
+
+            ldy #S_OPPONENTSTURN
+            jsr PlayScroll
+            ldy #50
+-           +WaitVBL($43)
+            dey
+            bne -
+            ldy #S_EMPTY
+            jsr PlayScroll
 
             ; AI turn: while possible (room on table, possible target), play random cards from hand
 .ai_castmore:
@@ -2290,6 +2308,14 @@ ScrollData:
     !fill (40-12)/2," "
     !scr " game over! " ;12
     !fill (40-12)/2," "
+    S_YOURTURN=*-ScrollData
+    !fill (40-14)/2," "
+    !scr " your turn... " ;14
+    !fill (40-14)/2," "
+    S_OPPONENTSTURN=*-ScrollData
+    !fill (40-20)/2," "
+    !scr " opponent's turn... " ;20
+    !fill (40-20)/2," "
     S_EMPTY=*-ScrollData
     !fill 40," "
 
