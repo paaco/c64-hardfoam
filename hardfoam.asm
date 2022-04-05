@@ -1,7 +1,6 @@
 ; HARD FOAM - a 4K compressed card game
 ; Developed for the https://ausretrogamer.com/2022-reset64-4kb-craptastic-game-competition
 
-; TODO: death check on players (win/lose)
 ; TODO: on play select place on table
 ; TODO: on play select target on table (own or opponent)
 ; TODO: AI turn: with each table card, attack random table card
@@ -968,6 +967,15 @@ RunPlayerAction:
             jsr CleanupDeaths
             jsr DrawPlayerTable
             jsr DrawAITable
+            ; check player deaths after playing a card
+            lda PlayerData+PD_LIFE
+            bne .d1
+            ldy #S_LOSE
+            jmp GameOver
+.d1:        lda AIData+PD_LIFE
+            bne ++
+            ldy #S_WIN
+            jmp GameOver
 
 ++          jmp .redraw
 
@@ -1127,7 +1135,15 @@ NextAIRound:
             jsr CleanupDeaths
             jsr DrawPlayerTable
             jsr DrawAITable
-            jmp .ai_castmore
+            ; check player deaths after playing a card
+            lda PlayerData+PD_LIFE
+            bne .d2
+            ldy #S_LOSE
+            jmp GameOver
+.d2:        lda AIData+PD_LIFE
+            bne .ai_castmore
+            ldy #S_WIN
+            jmp GameOver
 +           inx
             cpx #MAX_HAND
             bne -
@@ -1144,6 +1160,21 @@ NextAIRound:
             jsr UntapTable
             jsr DrawAITable
             jmp NextPlayerRound
+
+;-----------
+; GAME OVER
+;-----------
+
+; Y=scroll text
+GameOver:
+            jsr PlayScroll
+-           jsr ReadJoystick
+            bne -
+-           jsr ReadJoystick
+            beq -
+            ldy #S_EMPTY
+            jsr PlayScroll
+            jmp Start
 
 
 ;----------------------------------------------------------------------------
@@ -1595,6 +1626,29 @@ FXOffsets:
 !if (*-FXOffsets <> MAX_TABLE*SIZEOF_TD) { !error "FXOffsets table wrong size" }
             !fill $80-SIZEOF_TD*MAX_TABLE,0
             !for i,0,MAX_TABLE-1 { !byte $88 + i * (TABLE_CARDWIDTH+1),0,0,0 } ; each entry is SIZEOF_TD
+
+; scroll text Y into view (clobbers A,X,Y,Tmp1)
+PlayScroll:
+            lda #40
+            sta Tmp1
+--          +WaitVBL($E0)
+            ; scroll
+            ldx #0
+-           lda SCREEN+11*40+1,x
+            sta SCREEN+11*40,x
+            inx
+            cpx #40*3
+            bne -
+            lda ScrollData,y
+            sta SCREEN+11*40+39
+            lda ScrollData,y
+            sta SCREEN+12*40+39
+            lda ScrollData,y
+            sta SCREEN+13*40+39
+            iny
+            dec Tmp1
+            bne --
+            rts
 
 
 ;----------------------------------------------------------------------------
@@ -2224,6 +2278,23 @@ AINames:
 
 
 ;----------------------------------------------------------------------------
+; SCROLL TEXTS
+;----------------------------------------------------------------------------
+
+ScrollData:
+    S_WIN=*-ScrollData
+    !fill (40-8)/2," "
+    !scr " you win! " ;10
+    !fill (40-8)/2," "
+    S_LOSE=*-ScrollData
+    !fill (40-12)/2," "
+    !scr " game over! " ;12
+    !fill (40-12)/2," "
+    S_EMPTY=*-ScrollData
+    !fill 40," "
+
+
+;----------------------------------------------------------------------------
 ; FRAMES
 ;----------------------------------------------------------------------------
 
@@ -2425,5 +2496,3 @@ logo:       !byte %01100110,%00111110,%01111110,%11111110
 
 
 ;----------------------------------------------------------------------------
-!byte 0 ; DUMMY to show where we are in report
-!if * >= $1800 { !error "Out of memory - start compressing" }
