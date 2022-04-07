@@ -3,8 +3,6 @@
 
 ; TODO: on play select place on table
 ; TODO: on play select target on table (own or opponent)
-; TODO: AI turn: with each table card, attack random table card
-; TODO: AI turn: if there are no opponent table cards left, attack player
 ; TODO: 15+1 free deck selector
 ; TODO: decide on logo (adds at least 200 bytes packed)
 ; TODO: experimenting with _Draw vs specific functions showed 2x speedup (maybe more)
@@ -99,13 +97,13 @@ SIZEOF_PD=64
 !addr InsertingPos=$55 ; place to insert card during DrawTable ($FF=disable)
 !addr InsertingCard=$56 ; card to show during DrawTable
 !addr EfQPtr=$57    ; next place in Effect Queue
-; Effect interface
 !addr EfSource=$58  ; Effect source (Table-card or 0 in case of spell)
 !addr EfParam=$59   ; Parameter for effect (table or card to apply effect to)
 !addr FxCard=$5A    ; FX Table-card
 !addr FxScrOff=$5B  ; FX screen offset
 !addr FxPtr=$5C     ; FX current table offset
 !addr FxLoop=$5D    ; FX loop counter temp data used during FX
+!addr AiAttacks=$5E ; #attacks the AI tries
 ; AI Data (consecutive)
 !addr AIData=$90    ; PlayerData+$80 (SIZEOF_PD=64 bytes)
 ; Draws rectangle 5x5 (upto 8x6) via DrawF function (clobbers A,Y)
@@ -966,7 +964,7 @@ RunPlayerAction:
             ; run all queued effects
 .effects1:  jsr RunEffect
             jsr DrawCounters
-            jsr DrawPlayerTable ; TODO should this be part of RunEffect somehow?
+            jsr DrawPlayerTable
             ldy EfQPtr
             bne .effects1
             jsr QueueDeaths
@@ -1103,6 +1101,7 @@ NextAIRound:
             ldy #S_OPPONENTSTURN
             jsr PlayScroll
             ldy #50
+            sty AiAttacks
 -           +WaitVBL($43)
             dey
             bne -
@@ -1136,6 +1135,7 @@ NextAIRound:
             bpl +
             ; castable card found
             jsr CastAICard
+RunAIAction:
             +WaitVBL($83)
             jsr DrawCounters
             jsr DrawAIHand
@@ -1143,7 +1143,7 @@ NextAIRound:
             ; run all queued effects
 .effects3:  jsr RunEffect
             jsr DrawCounters
-            jsr DrawAITable ; TODO should this be part of RunEffect somehow?
+            jsr DrawAITable
             ldy EfQPtr
             bne .effects3
             jsr QueueDeaths
@@ -1170,11 +1170,55 @@ NextAIRound:
             bne --                      ; yes, so just retry
             ; no castable cards found
 
-            ; TODO AI turn: with each table card, attack random table card
-            ; TODO AI turn: if there are no opponent table cards left, attack player
+            ; AI turn: select a random table card, and if it exists and can attack, attack with it
+.rndcard:   jsr Random
+            cmp #MAX_TABLE
+            bcs .rndcard
+            tay
+            ldx AITableCardOffsets,y
+            lda TD_CARD,x
+            cmp #$FF
+            beq .ai_nextatk             ; empty can't attack
+            lda TD_STATUS,x
+            and #STATUS_TAPPED
+            bne .ai_nextatk             ; tapped card can't attack
+            lda TD_ATK,x
+            beq .ai_nextatk             ; don't attack when ATK=0 (that will only hurt)
+            ; Attack
+.ai_attack: lda PlayerData+PD_TABLE+TD_CARD ; is there a table-card?
+            cmp #$FF                    ; still open?
+            bne .target2
+            ; there are no Player cards, so attack Player directly
+            lda TD_STATUS,x
+            ora #STATUS_TAPPED
+            sta TD_STATUS,x             ; X=table-card source attacker
+            ldy #PlayerData             ; Y=player to attack
+            lda #E_INT_ATTACKPLAYER
+            jsr QueueEffect
+            jmp RunAIAction
+            ; otherwise, select Player Card target to attack
+.target2:   ; pick random card to attack
+.rndtarget: jsr Random
+            cmp #MAX_TABLE
+            bcs .rndtarget
+            tay
+            lda PlayerTableCardOffsets,y
+            tay
+            lda TD_CARD,y               ; Y=card to attack
+            cmp #$FF
+            beq .rndtarget
+            lda TD_STATUS,x
+            ora #STATUS_TAPPED
+            sta TD_STATUS,x             ; X=table-card source attacker
+            lda #E_INT_ATTACK
+            jsr QueueEffect
+            jmp RunAIAction
+.ai_nextatk:
+            dec AiAttacks
+            bne .rndcard                ; try more cards on table
 
             ; end of turn
-            ldx #AIData+PD_TABLE
+.ai_done:   ldx #AIData+PD_TABLE
             jsr UntapTable
             jsr DrawAITable
             jmp NextPlayerRound
