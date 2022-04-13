@@ -3,6 +3,8 @@
 
 ; TODO: show guard status
 ; TODO: handle guard status (must pick first when on table)
+; TODO: SID
+; TOOD: don't draw ATK/DEF on Spell cards
 ; TODO: on play select place on table
 ; TODO: on play select target on table (own or opponent)
 ; TODO: 15+1 free deck selector
@@ -1687,7 +1689,7 @@ PlayFX:
             ldy FxPtr
             lda FxData,y                ; FX parameter: 0..15=color, <0=tablecard
             bmi +
-            ldy FxScrOff
+.playfx3:   ldy FxScrOff
             jsr ColorCard
 .playfx2:   dec FxLoop
             bne -
@@ -1695,7 +1697,11 @@ PlayFX:
             jmp .playfxloop
 +           ldy FxCard
             jsr DrawTableCard
-            jmp .playfx2
+            ldy FxPtr
+            lda FxData,y                ; FX parameter: $F0..$FF=color
+            cmp #$F0
+            bcs .playfx3
+            bcc .playfx2                ; always
 
 FXOffsets:
             !for i,0,MAX_TABLE-1 { !byte 8 + i * (TABLE_CARDWIDTH+1),0,0,0 } ; each entry is SIZEOF_TD
@@ -2447,30 +2453,36 @@ frame_DEF: !byte $B0
 FxData:
     ; duration,color
     ;  duration: #frames, list ends with duration=0
-    ;  color: 0..15=respective color, <0=draw table card
+    ;  color: $00..$0F=color, $80=draw table card, $F0..$FF=draw table card in color
     FX_UNTAP=*-FxData
-    !byte 10,WHITE
+    !byte 20,WHITE
     !byte 0
     FX_GUARD=*-FxData
-    !byte 10,YELLOW
+    !byte 20,YELLOW
     !byte 0
     FX_GAIN11=*-FxData
     !byte 10,GREEN
-    !byte 5,$FF
-    !byte 10,WHITE
+    !byte 10,$F0+GREEN
+    !byte 20,WHITE
+    !byte 10,GREEN
+    !byte 20,WHITE
     !byte 0
     FX_DROPCARD=*-FxData
-    !byte 1,$FF
-    !byte 50,PURPLE ; DEBUG
+    !byte 5,$80
+    !byte 5,COL_SCREEN
+    !byte 5,$80
+    !byte 5,COL_SCREEN
+    !byte 5,$80
+    !byte 5,COL_SCREEN
+    !byte 5,$80
     !byte 0
     FX_HURT=*-FxData
-    !byte 1,$FF
-    !byte 1,LIGHT_RED
-    !byte 1,PURPLE
-    !byte 8,RED
+    !byte 5,$F0+LIGHT_RED
+    !byte 5,PURPLE
+    !byte 10,RED
     !byte 0
     FX_DEATH=*-FxData
-    !byte 50,BLACK ; DEBUG
+    !byte 50,BLACK
     !byte 0
 
 
