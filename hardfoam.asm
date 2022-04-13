@@ -1,6 +1,8 @@
 ; HARD FOAM - a 4K compressed card game
 ; Developed for the https://ausretrogamer.com/2022-reset64-4kb-craptastic-game-competition
 
+; TODO: show guard status
+; TODO: handle guard status (must pick first when on table)
 ; TODO: on play select place on table
 ; TODO: on play select target on table (own or opponent)
 ; TODO: 15+1 free deck selector
@@ -84,7 +86,8 @@ MAX_EFFECT_QUEUE=20
       TD_DEF=2      ; defense
       TD_STATUS=3   ; status bits: 1=tapped, 2=shielded
       STATUS_TAPPED=1
-      STATUS_SHIELDED=2
+      STATUS_GUARD=2
+      STATUS_SHIELDED=4
       SIZEOF_TD=4
      MAX_TABLE=5    ; max #cards on table
     PD_DECK=32      ; 32 bytes (card#)
@@ -1528,6 +1531,17 @@ Effect_Untap:
             lda #FX_UNTAP
             jmp PlayFX
 
++           cmp #E_GUARD
+            bne +
+; add guard status
+Effect_Guard:
+            ldx EfSource
+            lda TD_STATUS,x
+            ora #STATUS_GUARD
+            sta TD_STATUS,x
+            lda #FX_GUARD
+            jmp PlayFX
+
 +           cmp #E_ALL_GAIN11
             bne +
 Effect_AuraAllGain11:
@@ -2079,14 +2093,14 @@ SIZEOF_CARD=5       ; 256/5 => 50 cards max (0 and $FF are used for other purpos
 Cards:
     !byte 0 ; card# (offsets) should not be 0
     C_GOBLIN_LEADER=*-Cards
-    !byte $C3, $32, N_GOBLIN_LEADER, E_ALL_GAIN11, G_LEGND_GOBLIN
-    !byte $41, $12, N_WANNABE,       E_READY,      G_WANNABE
-    !byte $02, $12, N_WANNABE,       T_NONE,       G_3
-    !byte $03, $13, N_WANNABE,       T_NONE,       G_4
-    !byte $41, $14, N_WANNABE,       T_NONE,       G_5
-    !byte $02, $15, N_WANNABE,       T_NONE,       G_6
-    !byte $03, $16, N_WANNABE,       T_NONE,       G_7
-    !byte $03, $17, N_WANNABE,       T_NONE,       G_8
+    !byte $C3, $34, N_GOBLIN_LEADER, E_ALL_GAIN11, G_LEGND_GOBLIN
+    !byte $41, $11, N_WANNABE,       E_READY,      G_WANNABE
+    !byte $44, $35, N_SHIELDMASTA,   E_GUARD,      G_3
+    !byte $42, $32, N_GRUNT,         T_NONE,       G_4
+    !byte $45, $46, N_BRUISER,       T_NONE,       G_5
+    !byte $02, $00, N_GOBLIN_BOMB,   E_HIT_3,      G_BOMB
+    !byte $03, $00, N_GOBLIN_ROCKET, E_HIT_2x2,    G_ROCKET
+    !byte $05, $00, N_GOBLIN_FIRE,   E_HIT_ALL_2,  G_FIRE
     C_POLY_LEADER=*-Cards
     !byte $D3, $17, N_POLY_LEADER,   T_NONE,       G_LEGND_POLY
     !byte $51, $12, N_WANNABE,       T_NONE,       G_WANNABE
@@ -2152,15 +2166,15 @@ GlyphData:
     !byte 78,77,85
     !byte 87,87,62
     !byte 95,58,62
-    G_6=*-GlyphData
+    G_BOMB=*-GlyphData
     !byte 32,85,73
     !byte 233,160,93
     !byte 95,105,32
-    G_7=*-GlyphData
+    G_FIRE=*-GlyphData
     !byte 32,92,92
     !byte 92,102,163
     !byte 163,163,102
-    G_8=*-GlyphData
+    G_ROCKET=*-GlyphData
     !byte 32,30,32
     !byte 32,66,32
     !byte 233,226,223
@@ -2285,6 +2299,14 @@ TextData:
     !byte M_ALL,M_SUIT,M_GAIN11,0
     E_READY=*-TextData ; Card has no summoning sickness
     !byte M_READY,0
+    E_GUARD=*-TextData ; Card blocks
+    !byte M_GUARD,0
+    E_HIT_3=*-TextData ; Hit (enemy) for 3
+    !byte M_HIT,M_FOR_3,0
+    E_HIT_2x2=*-TextData ; Hit 2x (enemy) for 2
+    !byte M_HIT,M_2X,M_FOR_2,0
+    E_HIT_ALL_2=*-TextData ; Hit all for 2
+    !byte M_HIT,M_ALL,M_FOR_2,0
     T_YOUR_OPPONENT_IS=*-TextData
     !byte M_YOUR,M_OPPONENT,M_IS
     T_OPPONENT_NAME=*-TextData
@@ -2295,6 +2317,18 @@ TextData:
     !byte M_SUIT,M_DECK,0
     T_END=*-TextData
     !byte M_END,0
+    N_SHIELDMASTA=*-TextData
+    !byte M_GOBLIN,M_SHIELDMASTA,0
+    N_GRUNT=*-TextData
+    !byte M_GOBLIN,M_GRUNT,0
+    N_BRUISER=*-TextData
+    !byte M_GOBLIN,M_BRUISER,0
+    N_GOBLIN_BOMB=*-TextData
+    !byte M_GOBLIN,M_BOMB,0
+    N_GOBLIN_FIRE=*-TextData
+    !byte M_GOBLIN,M_FIRE,0
+    N_GOBLIN_ROCKET=*-TextData
+    !byte M_GOBLIN,M_ROCKET,0
 !if *-TextData >= $FF { !error "Out of TextData memory" }
 ; Additional effects - make sure they don't map to any string used as CARD_EFFECT
 E_INT_ATTACKPLAYER=3
@@ -2302,6 +2336,7 @@ E_INT_ATTACK=4
 E_INT_ATTACK2=5
 E_INT_DROPCARD=6
 E_INT_DEADCARD=7
+    !byte *-TextData ; DEBUG
 
 ; Text macros, each ends with a byte >= $80
 MacroData:
@@ -2331,9 +2366,19 @@ opponent_name2:                    !scr "p",'.'+$80 ; SELF-MODIFIED
     M_ALL         =*-MacroData+1 : !scr "al",'l'+$80
     M_GAIN11      =*-MacroData+1 : !scr "gain ",78,'1',83,'1'+$80
     M_READY       =*-MacroData+1 : !scr "ready",'.'+$80
+    M_GUARD       =*-MacroData+1 : !scr "guard",'.'+$80
+    M_HIT         =*-MacroData+1 : !scr "hi",'t'+$80
+    M_2X          =*-MacroData+1 : !scr "2",'x'+$80
+    M_FOR_2       =*-MacroData+1 : !scr "for ",78,'2'+$80
+    M_FOR_3       =*-MacroData+1 : !scr "for ",78,'3'+$80
+    M_SHIELDMASTA =*-MacroData+1 : !scr "shieldmast",'a'+$80
+    M_GRUNT       =*-MacroData+1 : !scr "grun",'t'+$80
+    M_BRUISER     =*-MacroData+1 : !scr "bruise",'r'+$80
+    M_BOMB        =*-MacroData+1 : !scr "bom",'b'+$80
+    M_FIRE        =*-MacroData+1 : !scr "fir",'e'+$80
+    M_ROCKET      =*-MacroData+1 : !scr "rocke",'t'+$80
 !if *-MacroData >= $FF { !error "Out of MacroData memory" }
-
-SIZEOF_TEXT=*-TextData
+    !byte *-MacroData ; DEBUG
 
 AINames:
     !scr "bd","jt","mg","rh"
@@ -2405,6 +2450,9 @@ FxData:
     ;  color: 0..15=respective color, <0=draw table card
     FX_UNTAP=*-FxData
     !byte 10,WHITE
+    !byte 0
+    FX_GUARD=*-FxData
+    !byte 10,YELLOW
     !byte 0
     FX_GAIN11=*-FxData
     !byte 10,GREEN
