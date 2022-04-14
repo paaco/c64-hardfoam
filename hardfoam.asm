@@ -3,6 +3,7 @@
 
 ; TODO: show guard status
 ; TODO: handle guard status (must pick first when on table)
+; TODO: implement spells
 ; TODO: SID
 ; TOOD: don't draw ATK/DEF on Spell cards
 ; TODO: on play select place on table
@@ -2108,14 +2109,14 @@ Cards:
     !byte $03, $00, N_GOBLIN_ROCKET, E_HIT_2x2,    G_ROCKET
     !byte $05, $00, N_GOBLIN_FIRE,   E_HIT_ALL_2,  G_FIRE
     C_POLY_LEADER=*-Cards
-    !byte $D3, $17, N_POLY_LEADER,   T_NONE,       G_LEGND_POLY
+    !byte $D3, $07, N_POLY_LEADER,   E_GUARD,      G_LEGND_POLY
     !byte $51, $12, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $52, $12, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $53, $12, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $54, $12, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $55, $12, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $56, $12, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $57, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $52, $12, N_PLASTIC_CUP,   E_GUARD,      G_10
+    !byte $52, $13, N_LEGO,          E_READY,      G_14
+    !byte $54, $44, N_PVC,           T_NONE,       G_13
+    !byte $12, $00, N_PLASTIC_WRAP,  E_WRAP,       G_16
+    !byte $15, $00, N_PUR_FOAM,      E_GAIN_2D,    G_11
+    !byte $13, $00, N_PLASTIC_KNIFE, E_HIT_4,      G_12
     C_CANDY_LEADER=*-Cards
     !byte $E2, $02, N_CANDY_LEADER,  T_NONE,       G_LEGND_CANDY
     !byte $61, $11, N_WANNABE,       T_NONE,       G_WANNABE
@@ -2156,10 +2157,10 @@ GlyphData:
     !byte 73,104,85
     !byte 215,215,117
     !byte 81,73,41
-    G_2=*-GlyphData
-    !byte 73,104,85
-    !byte 118,215,215
-    !byte 40,58,87
+    ; G_2=*-GlyphData
+    ; !byte 73,104,85
+    ; !byte 118,215,215
+    ; !byte 40,58,87
     G_3=*-GlyphData
     !byte 73,104,104
     !byte 85,108,108
@@ -2205,17 +2206,17 @@ GlyphData:
     !byte 103,212,101
     !byte 103,212,101
     G_14=*-GlyphData
-    !byte 46,32,32
-    !byte 160,46,46
+    !byte 46,46,46
     !byte 160,160,160
-    G_15=*-GlyphData
-    !byte 85,64,73
-    !byte 67,67,67
-    !byte 74,64,75
+    !byte 32,32,32
+    ; G_15=*-GlyphData
+    ; !byte 85,64,73
+    ; !byte 67,67,67
+    ; !byte 74,64,75
     G_16=*-GlyphData
-    !byte 77,77,32
-    !byte 233,236,223
-    !byte 95,105,95
+    !byte 215,215,215
+    !byte 215,215,215
+    !byte 215,215,215
     G_LEGND_CANDY=*-GlyphData
     !byte 223,98,233
     !byte 160,160,160
@@ -2302,7 +2303,7 @@ TextData:
     !byte M_SUIT,M_WANNABE,0
     E_ALL_GAIN11=*-TextData ; All other cards of the same suit gain +1/+1
     E_INT_ALLGAIN11=*-TextData+1
-    !byte M_ALL,M_SUIT,M_GAIN11,0
+    !byte M_ALL,M_SUIT,M_GAIN,M_A1D1,0
     E_READY=*-TextData ; Card has no summoning sickness
     !byte M_READY,0
     E_GUARD=*-TextData ; Card blocks
@@ -2313,6 +2314,12 @@ TextData:
     !byte M_HIT,M_2X,M_FOR_2,0
     E_HIT_ALL_2=*-TextData ; Hit all for 2
     !byte M_HIT,M_ALL,M_FOR_2,0
+    E_HIT_4=*-TextData ; Hit (enemy) for 4
+    !byte M_HIT,M_FOR_4,0
+    E_WRAP=*-TextData ; Add 0/2D and guard
+    !byte M_GIVE,M_D2,M_AND,M_GUARD,0
+    E_GAIN_2D=*-TextData ; Add 2D to all
+    !byte M_ALL,M_GAIN,M_D2,0
     T_YOUR_OPPONENT_IS=*-TextData
     !byte M_YOUR,M_OPPONENT,M_IS
     T_OPPONENT_NAME=*-TextData
@@ -2335,6 +2342,18 @@ TextData:
     !byte M_GOBLIN,M_FIRE,0
     N_GOBLIN_ROCKET=*-TextData
     !byte M_GOBLIN,M_ROCKET,0
+    N_PLASTIC_CUP=*-TextData
+    !byte M_PLASTIC,M_CUP,0
+    N_LEGO=*-TextData
+    !byte M_LEGO,0
+    N_PVC=*-TextData
+    !byte M_PVC,0
+    N_PLASTIC_WRAP=*-TextData
+    !byte M_PLASTIC,M_WRAP,0
+    N_PUR_FOAM=*-TextData
+    !byte M_PUR,M_FOAM,0
+    N_PLASTIC_KNIFE=*-TextData
+    !byte M_PLASTIC,M_KNIFE,0
 !if *-TextData >= $FF { !error "Out of TextData memory" }
 ; Additional effects - make sure they don't map to any string used as CARD_EFFECT
 E_INT_ATTACKPLAYER=3
@@ -2370,19 +2389,31 @@ opponent_name2:                    !scr "p",'.'+$80 ; SELF-MODIFIED
     M_DECK        =*-MacroData+1 : !scr "dec",'k'+$80
     M_END         =*-MacroData+1 : !scr "en",'d'+$80
     M_ALL         =*-MacroData+1 : !scr "al",'l'+$80
-    M_GAIN11      =*-MacroData+1 : !scr "gain ",78,'1',83,'1'+$80
+    M_AND         =*-MacroData+1 : !scr "an",'d'+$80
+    M_GAIN        =*-MacroData+1 : !scr "gai",'n'+$80
+    M_A1D1        =*-MacroData+1 : !scr 78,'1',83,'1'+$80
+    M_D2          =*-MacroData+1 : !scr 83,'2'+$80
     M_READY       =*-MacroData+1 : !scr "ready",'.'+$80
     M_GUARD       =*-MacroData+1 : !scr "guard",'.'+$80
+    M_GIVE        =*-MacroData+1 : !scr "giv",'e'+$80
     M_HIT         =*-MacroData+1 : !scr "hi",'t'+$80
     M_2X          =*-MacroData+1 : !scr "2",'x'+$80
     M_FOR_2       =*-MacroData+1 : !scr "for ",78,'2'+$80
     M_FOR_3       =*-MacroData+1 : !scr "for ",78,'3'+$80
+    M_FOR_4       =*-MacroData+1 : !scr "for ",78,'4'+$80
     M_SHIELDMASTA =*-MacroData+1 : !scr "shieldmast",'a'+$80
     M_GRUNT       =*-MacroData+1 : !scr "grun",'t'+$80
     M_BRUISER     =*-MacroData+1 : !scr "bruise",'r'+$80
     M_BOMB        =*-MacroData+1 : !scr "bom",'b'+$80
     M_FIRE        =*-MacroData+1 : !scr "fir",'e'+$80
     M_ROCKET      =*-MacroData+1 : !scr "rocke",'t'+$80
+    M_PLASTIC     =*-MacroData+1 : !scr "plasti",'c'+$80
+    M_CUP         =*-MacroData+1 : !scr "cu",'p'+$80
+    M_LEGO        =*-MacroData+1 : !scr "leg",'o'+$80
+    M_PVC         =*-MacroData+1 : !scr "pv",'c'+$80
+    M_WRAP        =*-MacroData+1 : !scr "wra",'p'+$80
+    M_PUR         =*-MacroData+1 : !scr "pu",'r'+$80
+    M_KNIFE       =*-MacroData+1 : !scr "knif",'e'+$80
 !if *-MacroData >= $FF { !error "Out of MacroData memory" }
     !byte *-MacroData ; DEBUG
 
@@ -2455,10 +2486,8 @@ FxData:
     ;  duration: #frames, list ends with duration=0
     ;  color: $00..$0F=color, $80=draw table card, $F0..$FF=draw table card in color
     FX_UNTAP=*-FxData
-    !byte 20,WHITE
-    !byte 0
     FX_GUARD=*-FxData
-    !byte 20,YELLOW
+    !byte 20,WHITE
     !byte 0
     FX_GAIN11=*-FxData
     !byte 10,GREEN
