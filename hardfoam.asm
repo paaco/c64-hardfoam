@@ -1,7 +1,6 @@
 ; HARD FOAM - a 4K compressed card game
 ; Developed for the https://ausretrogamer.com/2022-reset64-4kb-craptastic-game-competition
 
-; TODO: show guard status
 ; TODO: handle guard status (must pick first when on table)
 ; TODO: implement spells
 ; TODO: SID
@@ -87,10 +86,10 @@ MAX_EFFECT_QUEUE=20
       TD_CARD=0     ; card# $FF=no card
       TD_ATK=1      ; attack
       TD_DEF=2      ; defense
-      TD_STATUS=3   ; status bits: 1=tapped, 2=shielded
+      TD_STATUS=3   ; status bits: 1=tapped, 2=guard, 4=shield
       STATUS_TAPPED=1
       STATUS_GUARD=2
-      STATUS_SHIELDED=4
+      STATUS_SHIELD=4
       SIZEOF_TD=4
      MAX_TABLE=5    ; max #cards on table
     PD_DECK=32      ; 32 bytes (card#)
@@ -1808,16 +1807,16 @@ DrawPlayerTable:
             jsr SetCursor
             ldy #PlayerData+PD_TABLE
 .drawtable:
-            ldx #$FF                    ; hide inserting by default
-; draw table in Y at Cursor inserting card A at position X (clobbers A,X,Y,TableIdx,Index)
-DrawTableInserting:
-            stx InsertingPos
-            sta InsertingCard
+;            ldx #$FF                    ; hide inserting by default
+;; draw table in Y at Cursor inserting card A at position X (clobbers A,X,Y,TableIdx,Index)
+;DrawTableInserting:
+;            stx InsertingPos
+;            sta InsertingCard
             ldx #MAX_TABLE
             jsr SetMaxIndexX0
 -           sty TableIdx                ; starts at $1C or $9C
-            cpx InsertingPos
-            beq .drawinsert
+;            cpx InsertingPos
+;            beq .drawinsert
             jsr DrawTableCard
             lda #TABLE_CARDWIDTH+1
             jsr AddToCursor
@@ -1828,13 +1827,13 @@ DrawTableInserting:
 --          jsr IncIndex
             bne -
             rts
-.drawinsert:
-            ldx InsertingCard
-            jsr DrawCard
-            lda #TABLE_CARDWIDTH+1
-            jsr AddToCursor
-            ldy TableIdx
-            bne --                      ; always
+; .drawinsert:
+;             ldx InsertingCard
+;             jsr DrawCard
+;             lda #TABLE_CARDWIDTH+1
+;             jsr AddToCursor
+;             ldy TableIdx
+;             bne --                      ; always
 
 
 ;----------------------------------------------------------------------------
@@ -1850,15 +1849,10 @@ DrawTableCard:
             ldx #CFG_CLEARFRAME         ; clear card
             jmp Draw
 +           jsr DecorateBottomFrame     ; set (default) atk/def values
-            ; hide type/cost
-            lda #79                     ; left corner
-            sta frame_TYPE
-            lda #119                    ; top line
-            sta frame_COST
-            ; override colors if tapped
+            ; disable recoloring when tapped
             lda #$85                    ; STA
             sta .fixupcolorwrite        ; enable color write
-            lda TD_STATUS,y             ; status bits: 1=tapped, 2=shielded
+            lda TD_STATUS,y
             and #STATUS_TAPPED
             beq +
             lda #COL_DISABLED
@@ -1866,18 +1860,40 @@ DrawTableCard:
             sta SuitCol
             lda #$24                    ; BIT
             sta .fixupcolorwrite        ; disable color write
-+           tya                         ; backup card in Y
++           lda TD_STATUS,y
+            and #STATUS_GUARD
+            bne .guard
+            ; regular card
+            tya                         ; backup card in Y
             pha
-            jsr .drawglyphframe
+            lda Cards+CARD_GLYPH,x
+            ldx #CFG_GLYPH
+            ldy #40
+            jsr DrawWithOffset
+            lda #FRAME_TABLE_CARD
+            ldx #CFG_FRAME
+            jsr Draw
+            pla
+            tax                         ; restore card to X
+            bne .setatkdef              ; always
+.guard:     ; guard card
+            tya                         ; backup card in Y
+            pha
+            lda Cards+CARD_GLYPH,x
+            ldx #CFG_GLYPH
+            ldy #40
+            jsr DrawWithOffset
+            lda #FRAME_GUARD
+            ldx #CFG_FRAME
+            jsr Draw
             pla
             tax                         ; restore card to X
             ; update attack value with actual
-            ldy #5*40+1                 ; ATK position
+.setatkdef: ldy #5*40+1                 ; ATK position
             jsr .updateatkdef
             ; update defense value with actual
             inx ; CAREFUL: THIS ASSUMES DEFENSE COMES DIRECTLY AFTER ATTACK IN MEMORY
             ldy #5*40+4                 ; DEF position
-            ; fall through
 ; common code to read screen to determine high/low/same, X=table index
 .updateatkdef:
             lda (_CursorPos),y
@@ -1918,7 +1934,9 @@ DecorateBottomFrame:
             lda Cards+CARD_ATDF,x
             and #$0F
             ora #$B0
-            sta frame_DEF
+            sta frame_DEF  ; Regular frame
+            sta frame_DEF2 ; Table card frame
+            sta frame_DEF3 ; Guard frame
             lda Cards+CARD_ATDF,x
             lsr
             lsr
@@ -1926,6 +1944,8 @@ DecorateBottomFrame:
             lsr
             ora #$B0
             sta frame_ATK
+            sta frame_ATK2
+            sta frame_ATK3
             ; fall through
 
 ; sets CharCol and SuitCol according to card in X (clobbers A)
@@ -1950,7 +1970,6 @@ SetColors:
 ; - draws legend border, full decoration and default attack/defense
 DrawCard:
             jsr DecorateFrame
-.drawglyphframe:
             lda Cards+CARD_GLYPH,x
             ldx #CFG_GLYPH
             ldy #40
@@ -2452,8 +2471,8 @@ ScrollData:
 
 ; DrawF_Frame source data, use $60/96 to skip over a char
 FrameData:
-    FRAME_CARD=*-FrameData              ; Full 5x6 card frame without top decorations
-    FRAME2_CARD=*-FrameData             ; 5x2 top of card frame without top decorations
+    FRAME_CARD=*-FrameData              ; Full 5x6 decorated card frame
+    FRAME2_CARD=*-FrameData             ; 5x2 top of decorated card frame
 frame_TYPE: !byte 79
 frame_COST: !byte 119
     !byte 119,119,80
@@ -2465,7 +2484,16 @@ frame_COST: !byte 119
 frame_ATK: !byte $B0
     !byte 160,211
 frame_DEF: !byte $B0
-    ; Full 5x6 card back
+    FRAME_TABLE_CARD=*-FrameData        ; Full 5x6 table card frame
+    !byte 79,119,119,119,80
+    !byte 116,96,96,96,106
+    !byte 116,96,96,96,106
+    !byte 116,96,96,96,106
+    !byte 76,111,111,111,122
+    !byte 206
+frame_ATK2: !byte $B0
+    !byte 160,211
+frame_DEF2: !byte $B0
     FRAME_CARDBACK=*-FrameData          ; Full 5x6 card back
     !byte 236,192,192,192,251
     !byte 194,102,102,102,194
@@ -2474,6 +2502,22 @@ frame_DEF: !byte $B0
     FRAME2_CARDBACK=*-FrameData         ; 5x2 bottom of card back
     !byte 194,102,102,102,194
     !byte 252,192,192,192,254
+    FRAME_GUARD=*-FrameData             ; Full 5x6 Guard card frame
+    !byte 135,149,129,146,132
+    !byte 116,96,96,96,106
+    !byte 116,96,96,96,106
+    !byte 116,96,96,96,106
+    !byte 76,111,111,111,122
+    !byte 206
+frame_ATK3: !byte $B0
+    !byte 160,211
+frame_DEF3: !byte $B0
+    ; FRAME_SHIELD=*-FrameData            ; 5x5 Shield card frame
+    ; !byte 255,119,119,119,127
+    ; !byte 116,96,96,96,106
+    ; !byte 116,96,96,96,106
+    ; !byte 116,96,96,96,106
+    ; !byte 127,111,111,111,255
 
 
 ;----------------------------------------------------------------------------
@@ -2487,7 +2531,7 @@ FxData:
     ;  color: $00..$0F=color, $80=draw table card, $F0..$FF=draw table card in color
     FX_UNTAP=*-FxData
     FX_GUARD=*-FxData
-    !byte 20,WHITE
+    !byte 20,$F0+WHITE
     !byte 0
     FX_GAIN11=*-FxData
     !byte 10,GREEN
