@@ -1,7 +1,6 @@
 ; HARD FOAM - a 4K compressed card game
 ; Developed for the https://ausretrogamer.com/2022-reset64-4kb-craptastic-game-competition
 
-; TODO: handle guard status (must pick first when on table)
 ; TODO: implement spells
 ; TODO: SID
 ; TOOD: don't draw ATK/DEF on Spell cards
@@ -109,6 +108,7 @@ SIZEOF_PD=64
 !addr FxPtr=$5C     ; FX current table offset
 !addr FxLoop=$5D    ; FX loop counter temp data used during FX
 !addr AiAttacks=$5E ; #attacks the AI tries
+!addr StatusMask=$5F; combined statuses of all cards on a table
 ; AI Data (consecutive)
 !addr AIData=$90    ; PlayerData+$80 (SIZEOF_PD=64 bytes)
 ; Draws rectangle 5x5 (upto 8x6) via DrawF function (clobbers A,Y)
@@ -1058,6 +1058,8 @@ PlayerAttack:
 
 ; player picks target from AI cards <> empty! (clobbers A,X,Y,Index) returns Y=selected table-card or 0 if none
 PlayerPickTarget: ; TODO also usable to just browse AI cards
+            ldx #AIData+PD_TABLE
+            jsr CalculateStatusMask
             ldx #MAX_TABLE              ; TODO calculate actual #cards on table (this works, but needs to check for empty)
             jsr SetMaxIndexX0
 .pick2:     jsr ClearUpperLines
@@ -1082,7 +1084,13 @@ PlayerPickTarget: ; TODO also usable to just browse AI cards
             lda TD_CARD,y
             cmp #$FF
             beq .pick2                  ; empty, retry
-            jmp ClearUpperLines
+            lda StatusMask
+            and #STATUS_GUARD
+            beq ++                      ; no Guards so fine
+            lda TD_STATUS,y
+            and #STATUS_GUARD
+            beq .pick2                  ; must pick a Guard, retry
+++          jmp ClearUpperLines
 +           cmp #%11111101              ; DOWN
             bne .pick2
             ldy #0                      ; return 0 in Y in case of abort
@@ -1176,6 +1184,8 @@ RunAIAction:
             ; no castable cards found
 
             ; AI turn: select a random table card, and if it exists and can attack, attack with it
+            ldx #PlayerData+PD_TABLE
+            jsr CalculateStatusMask
 .rndcard:   jsr Random
             cmp #MAX_TABLE
             bcs .rndcard
@@ -1212,7 +1222,13 @@ RunAIAction:
             lda TD_CARD,y               ; Y=card to attack
             cmp #$FF
             beq .rndtarget
-            lda TD_STATUS,x
+            lda StatusMask
+            and #STATUS_GUARD
+            beq +                       ; no Guards so fine
+            lda TD_STATUS,y
+            and #STATUS_GUARD
+            beq .rndtarget              ; must pick a Guard, retry
++           lda TD_STATUS,x
             ora #STATUS_TAPPED
             sta TD_STATUS,x             ; X=table-card source attacker
             lda #E_INT_ATTACK
@@ -1481,6 +1497,25 @@ CleanupDeaths:
             clc
             adc #SIZEOF_TD
 ++          tax                         ; X=X+SIZEOF_TD
+            and #$7F                    ; make it work with both Players
+            cmp #PlayerData+PD_TABLE+MAX_TABLE*SIZEOF_TD
+            bne -
+            rts
+
+; calculate combined StatusMask for all cards on table in X (clobbers A,X)
+CalculateStatusMask:
+            lda #0
+            sta StatusMask
+-           lda TD_CARD,x
+            cmp #$FF
+            beq +
+            lda TD_STATUS,x
+            ora StatusMask
+            sta StatusMask
++           txa
+            clc
+            adc #SIZEOF_TD
+            tax
             and #$7F                    ; make it work with both Players
             cmp #PlayerData+PD_TABLE+MAX_TABLE*SIZEOF_TD
             bne -
