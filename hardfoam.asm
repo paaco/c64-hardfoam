@@ -1,12 +1,13 @@
 ; HARD FOAM - a 4K compressed card game
 ; Developed for the https://ausretrogamer.com/2022-reset64-4kb-craptastic-game-competition
 
-; TODO: implement spells
+; TODO spell cast indication (scroll in glyph + name in color)
+; TODO make sure spell is castable when it requires a target! (e.g. PLASTIC KNIFE crashes)
 ; TODO: SID
-; TOOD: don't draw ATK/DEF on Spell cards
+; TODO: don't draw ATK/DEF on Spell cards
 ; TODO: on play select place on table
 ; TODO: on play select target on table (own or opponent)
-; TODO: 15+1 free deck selector
+; TODO: 14+1 free deck selector
 ; TODO: decide on logo (adds at least 200 bytes packed)
 ; TODO: experimenting with _Draw vs specific functions showed 2x speedup (maybe more)
 
@@ -50,6 +51,9 @@ CHR_SPACE=32+DEBUG*10 ; space or star
 CHR_PLAY=30 ; arrow up
 CHR_NO_PLAY=86 ; cross
 CHR_ENDTURN=62 ; >
+CHR_ATK=78 ; /
+CHR_DEF=83 ; heart
+CHR_LIFE=83 ; heart
 ;
 HAND_CARDWIDTH=4
 TABLE_CARDWIDTH=5
@@ -329,18 +333,18 @@ DrawCounters:
             sta SCREEN+23*40+1
 
             ; draw both health bars
-            lda #COL_HEALTH_ON
-            sta CharCol
             lda #10
             sec
             sbc AIData+PD_LIFE
             tax
+            lda #COL_HEALTH_ON
+            sta CharCol
             ldy #<(SCREEN+39)
             lda #>(SCREEN+39)
             jsr .healthbar
+            ldx PlayerData+PD_LIFE
             lda #COL_HEALTH_OFF
             sta CharCol
-            ldx PlayerData+PD_LIFE
             ldy #<(SCREEN+15*40+39)
             lda #>(SCREEN+15*40+39)
             ; fall through
@@ -354,7 +358,7 @@ DrawCounters:
             lda CharCol
             eor #COL_HEALTH_ON-COL_HEALTH_OFF ; NOTE: largest-smallest
             sta CharCol
-+           lda #$53                    ; heart
++           lda #CHR_LIFE
             ldy #0
             sta (_CursorPos),y
             lda CharCol
@@ -1124,7 +1128,7 @@ NextAIRound:
             ; AI turn: while possible (room on table, possible target), play random cards from hand
 .ai_castmore:
             jsr Random
-            and #$0F                    ; 0..15
+            ;and #$0F                    ; 0..15
             sta Tmp1                    ; nr of castable cards to skip
             sta Tmp2
 --          ldx #0
@@ -1521,12 +1525,35 @@ CalculateStatusMask:
             bne -
             rts
 
+; picks random table-card of Player in A (clobbers A,X,Tmp1,Tmp2) returns table-card in X
+; NOTE: hangs when there are no cards on table!
+PickRandomTargetInX:
+            ora #PD_TABLE
+            sta Tmp1                    ; backup table
+            jsr Random                  ; 0-255
+            sta Tmp2                    ; nr of cards to skip (can be 0)
+--          ldx Tmp1
+-           lda TD_CARD,x
+            cmp #$FF
+            beq --                      ; restart loop
+            lda Tmp2
+            beq .stealrts3              ; found one
+            dec Tmp2
+            txa
+            clc
+            adc #SIZEOF_TD
+            tax
+            and #$7F                    ; make it work with both Players
+            cmp #PlayerData+PD_TABLE+MAX_TABLE*SIZEOF_TD
+            bne -
+            beq --                      ; always
+
 
 ;----------------------------------------------------------------------------
 ; EFFECTS
 ;----------------------------------------------------------------------------
 
-; Queue effect A with Source X and Param Y (clobbers A,Y,EfQTmp)
+; Queue effect A with Source X and Param Y (clobbers A,EfQTmp)
 QueueEffect:
             sty EfQTmp
             ldy EfQPtr
@@ -1542,6 +1569,7 @@ QueueEffect:
             sta EQueueSource,y
             lda EfQTmp
             sta EQueueParam,y
+            tay
 .stealrts3: rts
 
 ; applies first effect from the Effect Queue (clobbers A,X,Y)
@@ -1561,7 +1589,7 @@ RunEffect:
             bne +
 ; untap Source
 Effect_Untap:
-            ldx EfSource
+            ldx EfSource                ; table-card
             lda TD_STATUS,x
             and #255-STATUS_TAPPED
             sta TD_STATUS,x
@@ -1572,21 +1600,19 @@ Effect_Untap:
             bne +
 ; add guard status
 Effect_Guard:
-            ldx EfSource
+            ldx EfSource                ; table-card
             lda TD_STATUS,x
             ora #STATUS_GUARD
             sta TD_STATUS,x
             lda #FX_GUARD
             jmp PlayFX
 
-+           cmp #E_ALL_GAIN11
++           cmp #E_ALL_GAIN_A1D1
             bne +
 Effect_AuraAllGain11:
-            lda #E_INT_ALLGAIN11
-; for each card on table (not Source) that matches Suit of Source post effect A
-Effect_SuitAura:
+; for each card on table (not Source) that matches Suit of Source post effect
             sta EfParam
-            ldx EfSource
+            ldx EfSource                ; table-card
             ldy TD_CARD,x
             lda Cards+CARD_LTSC,y
             and #%00110000              ; LTSSCCCC SS=Suit(0,1,2,3)
@@ -1594,7 +1620,7 @@ Effect_SuitAura:
             txa
             and #$80
             ora #PlayerData+PD_TABLE
-            tax                         ; first Table-cad
+            tax                         ; first table-card
             cpx EfSource
             beq ++                      ; skip self
 -           ldy TD_CARD,x
@@ -1604,7 +1630,7 @@ Effect_SuitAura:
             and #%00110000              ; LTSSCCCC SS=Suit(0,1,2,3)
             cmp Tmp3
             bne ++                      ; skip wrong suit
-            lda EfParam
+            lda #E_INT_GAIN_A1D1
             jsr QueueEffect
 ++          txa
             clc
@@ -1613,16 +1639,16 @@ Effect_SuitAura:
             and #$7F                    ; make it work with both Players
             cmp #PlayerData+PD_TABLE+MAX_TABLE*SIZEOF_TD
             bne -
-            rts
+.stealrts4: rts
 
-+           cmp #E_INT_ALLGAIN11
++           cmp #E_INT_GAIN_A1D1
             bne +
-; inc ATK and inc DEF of Source TODO limit values
+; inc ATK and inc DEF of Source
 Effect_Gain11:
             ldx EfSource
             inc TD_ATK,x
             inc TD_DEF,x
-            lda #FX_GAIN11
+            lda #FX_GAIN_A1D1
             jmp PlayFX
 
 +           cmp #E_INT_ATTACKPLAYER
@@ -1637,19 +1663,19 @@ Effect_AttackPlayer:
             bpl ++
             lda #0
 ++          sta PD_LIFE,x
-.effectend  rts
+            rts
 
 +           cmp #E_INT_ATTACK
             bne +
 ; push counter attack (Param attacks Source) and attack (Source attacks Param)
 ;  note: this causes attacks to be executed "simultaneously" but visually Source goes first
 Effect_Attack:
-            ldx EfParam
-            ldy EfSource
+            ldx EfParam                 ; target table-card
+            ldy EfSource                ; table-card
             lda #E_INT_ATTACK2
             jsr QueueEffect
-            ldx EfSource
-            ldy EfParam
+            ldx EfSource                ; table-card
+            ldy EfParam                 ; target table-card
             lda #E_INT_ATTACK2
             jmp QueueEffect
 
@@ -1657,22 +1683,22 @@ Effect_Attack:
             bne +
 ; subtract Source ATK from Param (table-card)'s DEF, clamping at 0
 Effect_AttackCard:
-            ldx EfParam
+            ldx EfParam                 ; target table-card
             lda TD_DEF,x
-            ldy EfSource
+            ldy EfSource                ; table-card
             sec
             sbc TD_ATK,y
             bpl ++
             lda #0
 ++          sta TD_DEF,x
             lda TD_ATK,y
-            beq .effectend
+            beq .stealrts4
             lda #FX_HURT
             jmp PlayFX
 
 +           cmp #E_INT_DROPCARD
             bne +
-; Puts card Param at Source onto table and queues its effect
+; puts card Param at Source onto table and queues its effect
 Effect_DropCard:
             ldx EfSource                ; table-card
             ldy EfParam                 ; card#
@@ -1682,12 +1708,142 @@ Effect_DropCard:
             jmp PlayFX
 
 +           cmp #E_INT_DEADCARD
-            bne .effectend
-; Puts card Param at Source onto table and queues its effect
+            bne +
+; plays death effect
 Effect_DeadCard:
             ldx EfSource                ; table-card
             lda #FX_DEATH
             jmp PlayFX
+
++           cmp #E_HIT_4
+            bne +
+; queue hit 4 effect on random enemy
+            ldy #4                      ; Y=damage
+            lda EfSource                ; Player
+            eor #$80
+            jsr PickRandomTargetInX     ; X=table-card
+            lda #E_INT_HIT
+            jmp QueueEffect
+
++           cmp #E_HIT_3
+            bne +
+; queue hit 3 effect on random enemy
+            ldy #3                      ; Y=damage
+            lda EfSource                ; Player
+            eor #$80
+            jsr PickRandomTargetInX     ; X=table-card
+            lda #E_INT_HIT
+            jmp QueueEffect
+
++           cmp #E_HIT_2x2
+            bne +
+; queue hit 2 effect on 2 random enemies
+            ldy #2                      ; Y=damage
+            lda EfSource                ; Player
+            eor #$80
+            jsr PickRandomTargetInX     ; X=table-card
+            lda #E_INT_HIT
+            jsr QueueEffect
+            lda EfSource                ; Player
+            eor #$80
+            jsr PickRandomTargetInX     ; X=table-card
+            lda #E_INT_HIT
+            jmp QueueEffect
+
++           cmp #E_INT_HIT
+    	    bne +
+; hits table-card Source for Param
+            ldx EfSource                ; table-card
+            lda TD_DEF,x
+            sec
+            sbc EfParam                 ; damage
+            bpl ++
+            lda #0
+++          sta TD_DEF,x
+            lda #FX_HURT
+            jmp PlayFX
+
++           cmp #E_WRAP
+            bne +
+; queue wrap effect on random selfy
+            lda EfSource                ; Player
+            jsr PickRandomTargetInX     ; X=table-card
+            lda #E_INT_WRAP
+            jmp QueueEffect
+
++           cmp #E_INT_WRAP
+            bne +
+; adds D3 and Guard to Source
+Effect_Wrap:
+            ldx EfSource
+            lda TD_DEF,x
+            clc
+            adc #3
+            sta TD_DEF,x
+            lda TD_STATUS,x
+            ora #STATUS_GUARD
+            sta TD_STATUS,x
+            lda #FX_WRAP
+            jmp PlayFX
+
++           cmp #E_GAIN_D2
+            bne +
+; queue gain D2 effect on own
+            lda EfSource                ; Player
+            ora #PD_TABLE
+            tax
+-           lda TD_CARD,x
+            cmp #$FF
+            beq ++
+            lda #E_INT_GAIN_D2
+            jsr QueueEffect
+            txa
+            clc
+            adc #SIZEOF_TD
+            tax
+            and #$7F                    ; make it work with both Players
+            cmp #PlayerData+PD_TABLE+MAX_TABLE*SIZEOF_TD
+            bne -
+++          rts
+
++           cmp #E_INT_GAIN_D2
+            bne +
+; adds D2 to Source
+Effect_GainD2:
+            ldx EfSource                ; table-card
+            lda TD_DEF,x
+            clc
+            adc #2
+            sta TD_DEF,x
+            lda #FX_GAIN_D2
+            jmp PlayFX
+
++           cmp #E_HIT_ALL_2
+            bne .stealrts1
+; queue hit 2 effect on all
+            ldy #2                      ; Y=damage
+            lda EfSource                ; Player
+            ora #PD_TABLE
+            tax
+            jsr .loopall
+            lda EfSource                ; Player
+            eor #$80
+            ora #PD_TABLE
+            tax
+.loopall:
+-           lda TD_CARD,x               ; X=table-card
+            cmp #$FF
+            beq ++
+            lda #E_INT_HIT
+            jsr QueueEffect
+            txa
+            clc
+            adc #SIZEOF_TD
+            tax
+            and #$7F                    ; make it work with both Players
+            cmp #PlayerData+PD_TABLE+MAX_TABLE*SIZEOF_TD
+            bne -
+++          rts
 
 
 ;----------------------------------------------------------------------------
@@ -1717,7 +1873,7 @@ PlayFX:
             ldy FxPtr
             lda FxData,y                ; FX #loops
             bne +                       ; 0=end FX
-            rts
+.stealrts1: rts
 +           sta FxLoop
             inc FxPtr
 -           +WaitVBL($E0)
@@ -1942,8 +2098,12 @@ DrawTableCard:
             .fixupcolorwrite=*
             sta CharCol                 ; SELF-MODIFIED $85=STA $24=BIT
             lda TD_ATK,x
-            ora #$30                    ; regular digits
-            sta (_CursorPos),y
+            clc
+            adc #$30                    ; regular digits
+            cmp #$3A                    ; 10 or higher?
+            bcc ++
+            lda #'?'                    ; yes, draw '?' symbol TODO instead draw second digit
+++          sta (_CursorPos),y
             lda CharCol
             sta (_ColorPos),y
 +           rts
@@ -2150,11 +2310,10 @@ CARD_EFFECT=3       ; 1 byte Effect TextPtr (also used to perform effect)
 CARD_GLYPH=4        ; 1 byte GlyphPtr
 SIZEOF_CARD=5       ; 256/5 => 50 cards max (0 and $FF are used for other purposes)
 
-; TODO add Sen'jin Shieldmasta ("Taz'dingo") 4 3/5
 Cards:
     !byte 0 ; card# (offsets) should not be 0
     C_GOBLIN_LEADER=*-Cards
-    !byte $C3, $34, N_GOBLIN_LEADER, E_ALL_GAIN11, G_LEGND_GOBLIN
+    !byte $C3, $34, N_GOBLIN_LEADER, E_ALL_GAIN_A1D1, G_LEGND_GOBLIN
     !byte $41, $11, N_WANNABE,       E_READY,      G_WANNABE
     !byte $44, $35, N_SHIELDMASTA,   E_GUARD,      G_3
     !byte $42, $32, N_GRUNT,         T_NONE,       G_4
@@ -2165,11 +2324,12 @@ Cards:
     C_POLY_LEADER=*-Cards
     !byte $D3, $07, N_POLY_LEADER,   E_GUARD,      G_LEGND_POLY
     !byte $51, $12, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $52, $12, N_PLASTIC_CUP,   E_GUARD,      G_10
+    !byte $52, $22, N_PLASTIC_CUP,   E_GUARD,      G_10
     !byte $52, $13, N_LEGO,          E_READY,      G_14
-    !byte $54, $44, N_PVC,           T_NONE,       G_13
+    !byte $54, $45, N_PVC,           T_NONE,       G_13
+    C_PLASTIC_WRAP=*-Cards
     !byte $12, $00, N_PLASTIC_WRAP,  E_WRAP,       G_16
-    !byte $15, $00, N_PUR_FOAM,      E_GAIN_2D,    G_11
+    !byte $15, $00, N_PUR_FOAM,      E_GAIN_D2,    G_11
     !byte $13, $00, N_PLASTIC_KNIFE, E_HIT_4,      G_12
     C_CANDY_LEADER=*-Cards
     !byte $E2, $02, N_CANDY_LEADER,  T_NONE,       G_LEGND_CANDY
@@ -2355,25 +2515,27 @@ TextData:
     !byte M_FOREVER,M_SOAP,0
     N_WANNABE=*-TextData
     !byte M_SUIT,M_WANNABE,0
-    E_ALL_GAIN11=*-TextData ; All other cards of the same suit gain +1/+1
-    E_INT_ALLGAIN11=*-TextData+1
+    E_ALL_GAIN_A1D1=*-TextData ; All other cards of the same suit gain A1/D1
+    E_INT_GAIN_A1D1=*-TextData+1
     !byte M_ALL,M_SUIT,M_GAIN,M_A1D1,0
     E_READY=*-TextData ; Card has no summoning sickness
     !byte M_READY,0
     E_GUARD=*-TextData ; Card blocks
     !byte M_GUARD,0
     E_HIT_3=*-TextData ; Hit (enemy) for 3
-    !byte M_HIT,M_FOR_3,0
+    !byte M_HIT,M_FOR,M_A3,0
     E_HIT_2x2=*-TextData ; Hit 2x (enemy) for 2
-    !byte M_HIT,M_2X,M_FOR_2,0
+    !byte M_HIT,M_2X,M_FOR,M_A2,0
     E_HIT_ALL_2=*-TextData ; Hit all for 2
-    !byte M_HIT,M_ALL,M_FOR_2,0
+    !byte M_HIT,M_ALL,M_FOR,M_A2,0
     E_HIT_4=*-TextData ; Hit (enemy) for 4
-    !byte M_HIT,M_FOR_4,0
-    E_WRAP=*-TextData ; Add 0/2D and guard
-    !byte M_GIVE,M_D2,M_AND,M_GUARD,0
-    E_GAIN_2D=*-TextData ; Add 2D to all
-    !byte M_ALL,M_GAIN,M_D2,0
+    !byte M_HIT,M_FOR,M_A4,0
+    E_WRAP=*-TextData ; Add D3 and guard
+    E_INT_WRAP=*-TextData+1
+    !byte M_GIVE,M_D3,M_AND,M_GUARD,0
+    E_GAIN_D2=*-TextData ; Add D2 to own
+    E_INT_GAIN_D2=*-TextData+1
+    !byte M_ALL,M_YOUR,M_GAIN,M_D2,0
     T_YOUR_OPPONENT_IS=*-TextData
     !byte M_YOUR,M_OPPONENT,M_IS
     T_OPPONENT_NAME=*-TextData
@@ -2409,13 +2571,13 @@ TextData:
     N_PLASTIC_KNIFE=*-TextData
     !byte M_PLASTIC,M_KNIFE,0
 !if *-TextData >= $FF { !error "Out of TextData memory" }
-; Additional effects - make sure they don't map to any string used as CARD_EFFECT
+; Additional effects - make sure they don't map to any string used as CARD_EFFECT (i.e. 2 or 15)
 E_INT_ATTACKPLAYER=3
 E_INT_ATTACK=4
 E_INT_ATTACK2=5
 E_INT_DROPCARD=6
 E_INT_DEADCARD=7
-    !byte *-TextData ; DEBUG
+E_INT_HIT=8
 
 ; Text macros, each ends with a byte >= $80
 MacroData:
@@ -2445,16 +2607,18 @@ opponent_name2:                    !scr "p",'.'+$80 ; SELF-MODIFIED
     M_ALL         =*-MacroData+1 : !scr "al",'l'+$80
     M_AND         =*-MacroData+1 : !scr "an",'d'+$80
     M_GAIN        =*-MacroData+1 : !scr "gai",'n'+$80
-    M_A1D1        =*-MacroData+1 : !scr 78,'1',83,'1'+$80
-    M_D2          =*-MacroData+1 : !scr 83,'2'+$80
-    M_READY       =*-MacroData+1 : !scr "ready",'.'+$80
-    M_GUARD       =*-MacroData+1 : !scr "guard",'.'+$80
+    M_A2          =*-MacroData+1 : !scr CHR_ATK,'2'+$80
+    M_A3          =*-MacroData+1 : !scr CHR_ATK,'3'+$80
+    M_A4          =*-MacroData+1 : !scr CHR_ATK,'4'+$80
+    M_A1D1        =*-MacroData+1 : !scr CHR_ATK,'1',CHR_DEF,'1'+$80
+    M_D2          =*-MacroData+1 : !scr CHR_DEF,'2'+$80
+    M_D3          =*-MacroData+1 : !scr CHR_DEF,'3'+$80
+    M_READY       =*-MacroData+1 : !scr "read",'y'+$80
+    M_GUARD       =*-MacroData+1 : !scr "guar",'d'+$80
     M_GIVE        =*-MacroData+1 : !scr "giv",'e'+$80
     M_HIT         =*-MacroData+1 : !scr "hi",'t'+$80
     M_2X          =*-MacroData+1 : !scr "2",'x'+$80
-    M_FOR_2       =*-MacroData+1 : !scr "for ",78,'2'+$80
-    M_FOR_3       =*-MacroData+1 : !scr "for ",78,'3'+$80
-    M_FOR_4       =*-MacroData+1 : !scr "for ",78,'4'+$80
+    M_FOR         =*-MacroData+1 : !scr "fo",'r'+$80
     M_SHIELDMASTA =*-MacroData+1 : !scr "shieldmast",'a'+$80
     M_GRUNT       =*-MacroData+1 : !scr "grun",'t'+$80
     M_BRUISER     =*-MacroData+1 : !scr "bruise",'r'+$80
@@ -2515,20 +2679,20 @@ frame_COST: !byte 119
     !byte 116,96,96,96,106
     !byte 116,96,96,96,106
     !byte 76,111,111,111,122
-    !byte 206
-frame_ATK: !byte $B0
-    !byte 160,211
-frame_DEF: !byte $B0
+    !byte CHR_ATK|$80
+frame_ATK: !byte 160
+    !byte 160,CHR_DEF|$80
+frame_DEF: !byte 160
     FRAME_TABLE_CARD=*-FrameData        ; Full 5x6 table card frame
     !byte 79,119,119,119,80
     !byte 116,96,96,96,106
     !byte 116,96,96,96,106
     !byte 116,96,96,96,106
     !byte 76,111,111,111,122
-    !byte 206
-frame_ATK2: !byte $B0
-    !byte 160,211
-frame_DEF2: !byte $B0
+    !byte CHR_ATK|$80
+frame_ATK2: !byte 160
+    !byte 160,CHR_DEF|$80
+frame_DEF2: !byte 160
     FRAME_CARDBACK=*-FrameData          ; Full 5x6 card back
     !byte 236,192,192,192,251
     !byte 194,102,102,102,194
@@ -2543,10 +2707,10 @@ frame_DEF2: !byte $B0
     !byte 116,96,96,96,106
     !byte 116,96,96,96,106
     !byte 76,111,111,111,122
-    !byte 206
-frame_ATK3: !byte $B0
-    !byte 160,211
-frame_DEF3: !byte $B0
+    !byte CHR_ATK|$80
+frame_ATK3: !byte 160
+    !byte 160,CHR_DEF|$80
+frame_DEF3: !byte 160
     ; FRAME_SHIELD=*-FrameData            ; 5x5 Shield card frame
     ; !byte 255,119,119,119,127
     ; !byte 116,96,96,96,106
@@ -2568,9 +2732,10 @@ FxData:
     FX_GUARD=*-FxData
     !byte 20,$F0+WHITE
     !byte 0
-    FX_GAIN11=*-FxData
-    !byte 10,GREEN
-    !byte 10,$F0+GREEN
+    FX_GAIN_A1D1=*-FxData
+    FX_GAIN_D2=*-FxData
+    FX_WRAP=*-FxData
+    !byte 20,$F0+GREEN
     !byte 20,WHITE
     !byte 10,GREEN
     !byte 20,WHITE
