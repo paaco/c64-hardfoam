@@ -1949,6 +1949,7 @@ PlayScroll:
             bne -
             lda #CHR_SPACE
             sta SCREEN+11*40+39
+            sta SCREEN+13*40+39
             lda ScrollData,y
             sta SCREEN+12*40+39
             iny
