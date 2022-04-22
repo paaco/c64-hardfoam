@@ -1,8 +1,6 @@
 ; HARD FOAM - a 4K compressed card game
 ; Developed for the https://ausretrogamer.com/2022-reset64-4kb-craptastic-game-competition
 
-; TODO spell cast indication (scroll in glyph + name in color)
-; TODO make sure spell is castable when it requires a target! (e.g. PLASTIC KNIFE crashes)
 ; TODO: SID
 ; TODO: don't draw ATK/DEF on Spell cards
 ; TODO: on play select place on table
@@ -58,6 +56,7 @@ CHR_LIFE=83 ; heart
 HAND_CARDWIDTH=4
 TABLE_CARDWIDTH=5
 MAX_EFFECT_QUEUE=20
+AI_ATTACKS=50
 
 !addr SCREEN=$0400
 
@@ -74,7 +73,7 @@ MAX_EFFECT_QUEUE=20
 !addr EfQTmp=$0B ; reuse Tmp2
 !addr Tmp3=$0C
 !addr TmpText=$0D
-;!addr Suit=$0E
+!addr Card=$0E
 !addr Joystick=$0F
 ; Player Data (consecutive) (SIZEOF_PD=64 bytes)
 !addr PlayerData=$10
@@ -830,6 +829,9 @@ Start:
             lda #>(SCREEN+4*40)
             jsr SetCursorDrawCardBack
             jsr DrawAIHand
+            ldy #<(SCREEN+15*40)
+            lda #>(SCREEN+15*40)
+            jsr SetCursorDrawCardBack
 
 ;---------------
 ; PLAYER'S TURN
@@ -846,13 +848,13 @@ NextPlayerRound:
             jsr DrawCounters
 
             ldy #S_YOURTURN
+            lda #COL_PLAIN
             jsr PlayScroll
             ldy #50
 -           +WaitVBL($43)
             dey
             bne -
-            ldy #S_EMPTY
-            jsr PlayScroll
+            jsr PlayScrollEmpty
 
             ; select from hand
             lda #0                      ; 0..MAX_HAND-1=card, MAX_HAND=END
@@ -970,6 +972,8 @@ RunPlayerAction:
             jsr DrawCounters
             jsr DrawPlayerHand
             jsr DrawPlayerTable
+            jsr ClearLowerLines
+            jsr PlayScrollCard
             ; run all queued effects
 .effects1:  jsr RunEffect
             jsr DrawCounters
@@ -983,13 +987,16 @@ RunPlayerAction:
             jsr CleanupDeaths
             jsr DrawPlayerTable
             jsr DrawAITable
+            jsr PlayScrollEmpty
             ; check player deaths after playing a card
             lda PlayerData+PD_LIFE
             bne .d1
+            lda #ORANGE
             ldy #S_LOSE
             jmp GameOver
 .d1:        lda AIData+PD_LIFE
             bne ++
+            lda #GREEN
             ldy #S_WIN
             jmp GameOver
 
@@ -1033,6 +1040,8 @@ PlayerAttack:
             cmp #$FF                    ; still open?
             bne .target
             ; there are no AI cards, so attack AI player directly
+            lda TD_CARD,x
+            sta Card
             lda TD_STATUS,x
             ora #STATUS_TAPPED
             sta TD_STATUS,x             ; X=table-card source attacker
@@ -1048,6 +1057,8 @@ PlayerAttack:
             tax                         ; restore X
             cpy #0                      ; Y=card to attack
             beq .attack3                ; aborted
+            lda TD_CARD,x
+            sta Card
             lda TD_STATUS,x
             ora #STATUS_TAPPED
             sta TD_STATUS,x             ; X=table-card source attacker
@@ -1116,14 +1127,14 @@ NextAIRound:
             jsr DrawCounters
 
             ldy #S_OPPONENTSTURN
+            lda #COL_PLAIN
             jsr PlayScroll
-            ldy #50
+            ldy #AI_ATTACKS
             sty AiAttacks
 -           +WaitVBL($43)
             dey
             bne -
-            ldy #S_EMPTY
-            jsr PlayScroll
+            jsr PlayScrollEmpty
 
             ; AI turn: while possible (room on table, possible target), play random cards from hand
 .ai_castmore:
@@ -1157,6 +1168,7 @@ RunAIAction:
             jsr DrawCounters
             jsr DrawAIHand
             jsr DrawAITable
+            jsr PlayScrollCard
             ; run all queued effects
 .effects3:  jsr RunEffect
             jsr DrawCounters
@@ -1170,6 +1182,7 @@ RunAIAction:
             jsr CleanupDeaths
             jsr DrawPlayerTable
             jsr DrawAITable
+            jsr PlayScrollEmpty
             ; check player deaths after playing a card
             lda PlayerData+PD_LIFE
             bne .d2
@@ -1208,6 +1221,8 @@ RunAIAction:
             cmp #$FF                    ; still open?
             bne .target2
             ; there are no Player cards, so attack Player directly
+            lda TD_CARD,x
+            sta Card
             lda TD_STATUS,x
             ora #STATUS_TAPPED
             sta TD_STATUS,x             ; X=table-card source attacker
@@ -1232,7 +1247,9 @@ RunAIAction:
             lda TD_STATUS,y
             and #STATUS_GUARD
             beq .rndtarget              ; must pick a Guard, retry
-+           lda TD_STATUS,x
++           lda TD_CARD,x
+            sta Card
+            lda TD_STATUS,x
             ora #STATUS_TAPPED
             sta TD_STATUS,x             ; X=table-card source attacker
             lda #E_INT_ATTACK
@@ -1259,8 +1276,7 @@ GameOver:
             bne -
 -           jsr ReadJoystick
             beq -
-            ldy #S_EMPTY
-            jsr PlayScroll
+            jsr PlayScrollEmpty
             jmp Start
 
 
@@ -1335,6 +1351,7 @@ DecreaseEnergy:
 ; cast card #X from hand of Player (clobbers A,X,Y) TODO card index on table + possible target
 CastPlayerCard:
             ldy PlayerData+PD_HAND,x    ; card# in Y
+            sty Card
             ; remove card by shifting cards X..MAX_HAND-1 left
 -           cpx #MAX_HAND-1             ; 0..MAX_HAND-1
             beq +
@@ -1361,7 +1378,8 @@ CastPlayerCard:
 
 ; cast card #X from hand of AI (clobbers A,X,Y) TODO card index on table + possible target
 CastAICard:
-            ldy AIData+PD_HAND,x    ; card# in Y
+            ldy AIData+PD_HAND,x        ; card# in Y
+            sty Card
             ; remove card by shifting cards X..MAX_HAND-1 left
 -           cpx #MAX_HAND-1             ; 0..MAX_HAND-1
             beq +
@@ -1526,19 +1544,21 @@ CalculateStatusMask:
             rts
 
 ; picks random table-card of Player in A (clobbers A,X,Tmp1,Tmp2) returns table-card in X
-; NOTE: hangs when there are no cards on table!
 PickRandomTargetInX:
             ora #PD_TABLE
             sta Tmp1                    ; backup table
             jsr Random                  ; 0-255
             sta Tmp2                    ; nr of cards to skip (can be 0)
+            ldx Tmp1
+            lda TD_CARD,x
+            cmp #$FF
+            beq .stealrts3              ; abort
 --          ldx Tmp1
 -           lda TD_CARD,x
             cmp #$FF
             beq --                      ; restart loop
-            lda Tmp2
-            beq .stealrts3              ; found one
             dec Tmp2
+            beq .stealrts3              ; found one
             txa
             clc
             adc #SIZEOF_TD
@@ -1663,7 +1683,9 @@ Effect_AttackPlayer:
             bpl ++
             lda #0
 ++          sta PD_LIFE,x
-            rts
+            ldx EfSource
+            lda #FX_ATTACK_PLAYER
+            jmp PlayFX
 
 +           cmp #E_INT_ATTACK
             bne +
@@ -1754,6 +1776,9 @@ Effect_DeadCard:
     	    bne +
 ; hits table-card Source for Param
             ldx EfSource                ; table-card
+            lda TD_CARD,x
+            cmp #$FF
+            beq .stealrts5              ; fizzle
             lda TD_DEF,x
             sec
             sbc EfParam                 ; damage
@@ -1804,6 +1829,7 @@ Effect_Wrap:
             and #$7F                    ; make it work with both Players
             cmp #PlayerData+PD_TABLE+MAX_TABLE*SIZEOF_TD
             bne -
+.stealrts5:
 ++          rts
 
 +           cmp #E_INT_GAIN_D2
@@ -1900,9 +1926,18 @@ FXOffsets:
             !fill $80-SIZEOF_TD*MAX_TABLE,0
             !for i,0,MAX_TABLE-1 { !byte $88 + i * (TABLE_CARDWIDTH+1),0,0,0 } ; each entry is SIZEOF_TD
 
-; scroll text Y into view (clobbers A,X,Y,Tmp1)
+; scroll text out of view without changing the color (clobbers A,X,Y,Tmp1)
+PlayScrollEmpty:
+            ldy #S_EMPTY
+            beq +                       ; always
+; scroll text Y in color A into view (clobbers A,X,Y,Tmp1)
 PlayScroll:
-            lda #40
+            ldx #0
+-           sta $D800+11*40,x
+            inx
+            cpx #40*3
+            bne -
++           lda #40
             sta Tmp1
 --          +WaitVBL($E0)
             ; scroll
@@ -1912,16 +1947,45 @@ PlayScroll:
             inx
             cpx #40*3
             bne -
-            lda ScrollData,y
+            lda #CHR_SPACE
             sta SCREEN+11*40+39
             lda ScrollData,y
             sta SCREEN+12*40+39
-            lda ScrollData,y
-            sta SCREEN+13*40+39
             iny
             dec Tmp1
             bne --
             rts
+
+; scroll card text based on Card
+PlayScrollCard:
+            ldy Card
+            cpy #$FF
+            beq +
+            lda Cards+CARD_LTSC,y
+            jsr SetSuitColor
+            ldx Cards+CARD_NAME,y
+            ldy #<ScrollCardNameData
+            lda #>ScrollCardNameData
+            jsr SetCursorDrawTextX
+-           lda #CHR_SPACE
+            sta (_CursorPos),y
+            iny
+            cpy #SIZEOF_SCROLLCARDNAME
+            bne -
+            ldy #S_CARD_NAME
+            lda SuitCol
+            jsr PlayScroll
+            ldy #<(SCREEN+11*40-40+5)
+            lda #>(SCREEN+11*40-40+5)
+            jsr SetCursor
+            ldx Card
+            lda Cards+CARD_GLYPH,x
+            ldx #CFG_GLYPH
+            ldy #40
+            jsr DrawWithOffset
+            lda #$FF
+            sta Card                    ; only play animation once
++           rts
 
 
 ;----------------------------------------------------------------------------
@@ -2145,7 +2209,6 @@ DecorateBottomFrame:
 
 ; sets CharCol and SuitCol according to card in X (clobbers A)
 SetColors:
-            ; setup colors
             lda Cards+CARD_LTSC,x
             bmi + ; legend
             lda #COL_PLAIN
@@ -2153,6 +2216,7 @@ SetColors:
 +           lda #COL_LEGEND
             sta CharCol
             lda Cards+CARD_LTSC,x
+SetSuitColor:
             lsr
             lsr
             lsr
@@ -2644,6 +2708,8 @@ AINames:
 ;----------------------------------------------------------------------------
 
 ScrollData:
+    S_EMPTY=*-ScrollData
+    !fill 40-((40-8)/2)," "
     S_WIN=*-ScrollData
     !fill (40-8)/2," "
     !scr " you win! " ;10
@@ -2659,9 +2725,11 @@ ScrollData:
     S_OPPONENTSTURN=*-ScrollData
     !fill (40-20)/2," "
     !scr " opponent's turn... " ;20
+    S_CARD_NAME=*-ScrollData
     !fill (40-20)/2," "
-    S_EMPTY=*-ScrollData
-    !fill 40," "
+ScrollCardNameData:
+    !fill 40-((40-20)/2)," "
+SIZEOF_SCROLLCARDNAME=*-ScrollCardNameData
 
 
 ;----------------------------------------------------------------------------
@@ -2756,6 +2824,9 @@ FxData:
     !byte 0
     FX_DEATH=*-FxData
     !byte 50,BLACK
+    !byte 0
+    FX_ATTACK_PLAYER=*-FxData
+    !byte 20,$80
     !byte 0
 
 
