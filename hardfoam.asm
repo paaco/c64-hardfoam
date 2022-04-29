@@ -1,7 +1,8 @@
 ; HARD FOAM - a 4K compressed card game
 ; Developed for the https://ausretrogamer.com/2022-reset64-4kb-craptastic-game-competition
 
-; TODO: SID
+; TODO: proper sfx for each effect
+; TODO:  programmable filter settings?
 ; TODO: don't draw ATK/DEF on Spell cards
 ; TODO: on play select place on table
 ; TODO: on play select target on table (own or opponent)
@@ -11,6 +12,7 @@
 
 !ifndef DEBUG {DEBUG=0}
 !ifndef INTRO {INTRO=0}
+!ifndef AUDIO {AUDIO=1}
 !if DEBUG=1 {
     !initmem $AA
 }
@@ -112,6 +114,7 @@ SIZEOF_PD=64
 !addr FxLoop=$5D    ; FX loop counter temp data used during FX
 !addr AiAttacks=$5E ; #attacks the AI tries
 !addr StatusMask=$5F; combined statuses of all cards on a table
+!addr SfxPtr=$60    ; SFX current table offset
 ; AI Data (consecutive)
 !addr AIData=$90    ; PlayerData+$80 (SIZEOF_PD=64 bytes)
 ; Draws rectangle 5x5 (upto 8x6) via DrawF function (clobbers A,Y)
@@ -516,7 +519,17 @@ INIT:
             lda #COL_SCREEN
             sta $D021
 
-            ; TODO setup SID
+!if AUDIO=1 {
+            ; minimalistic setup SID
+            lda #0                      ; no sound
+            sta $D404
+            lda #20                     ; cutoff high
+            sta $D416
+            lda #%11111111              ; RRRRE321 reso + filter voices
+            sta $D417
+            lda #%00101111              ; 3HBLVVVV band + volume
+            sta $D418
+}
 
 !if INTRO=1 {
             jmp Logo
@@ -1873,12 +1886,15 @@ Effect_GainD2:
 
 
 ;----------------------------------------------------------------------------
-; VISUAL FX PLAYER
+; CARD VISUAL/SOUND FX PLAYER
 ;----------------------------------------------------------------------------
 
 ; plays effect A on table-card X (clobbers A,X,Y,FxPtr,FxCard,FxScrOff,FxLoop)
 PlayFX:
             sta FxPtr
+!if AUDIO=1 {
+            sta SfxPtr                  ; set sound effect as well
+}
             stx FxCard
             ; set cursor for ColorCard
             lda FXOffsets-(PlayerData+PD_TABLE),x
@@ -1903,6 +1919,9 @@ PlayFX:
 +           sta FxLoop
             inc FxPtr
 -           +WaitVBL($E0)
+!if AUDIO=1 {
+            jsr PlaySoundFx
+}
             ldy FxPtr
             lda FxData,y                ; FX parameter: 0..15=color, <0=tablecard
             bmi +
@@ -1987,6 +2006,27 @@ PlayScrollCard:
             lda #$FF
             sta Card                    ; only play animation once
 +           rts
+
+!if AUDIO=1 {
+; plays sound effect frame in SfxPtr and advances (clobbers A,X,Y,Tmp1,SfxPtr)
+PlaySoundFx:
+            ldx #0              ; SID register counter
+            ldy SfxPtr
+            lda SfxData,y       ; get bit counter
+            beq ++              ; 0=done
+            inc SfxPtr
+            sta Tmp1            ; bit counter
+-           asl Tmp1
+            bcc +               ; bit unset, skip to next
+            ldy SfxPtr
+            lda SfxData,y
+            inc SfxPtr
+            sta $D400,x
++           inx
+            cpx #7
+            bne -
+++          rts
+}
 
 
 ;----------------------------------------------------------------------------
@@ -2789,10 +2829,10 @@ frame_DEF3: !byte 160
 
 
 ;----------------------------------------------------------------------------
-; COLOR FX
+; COLOR/SOUND FX
 ;----------------------------------------------------------------------------
 
-; Each FX is a list of color changes for a single card TODO accompanied by a sound FX
+; Each FX is a list of color changes for a single card
 FxData:
     ; duration,color
     ;  duration: #frames, list ends with duration=0
@@ -2829,6 +2869,26 @@ FxData:
     FX_ATTACK_PLAYER=*-FxData
     !byte 20,$80
     !byte 0
+
+!if AUDIO=1 {
+; Sound effects
+;  Each "frame" starts with a bit mask where the upper 7 bits indicate registers 0..6 to set, with data bytes following
+;  Use a Bitmask of 0 to end the stream (it will hang there)
+;  Use a Bitmask of 1 to do nothing that frame
+; IMPORTANT: FxData and SfxData use the same starting Ptr value so they should be synced in memory
+;            FxData duration determines when the FX finishes
+SfxData:
+            ;     Bitmask,   FL, FH, PL, PH, WV, AD, SR
+            !byte %11111110,$0A,$4D,$00,$08,$81,$22,$F2
+            !byte 1,1
+            !byte %00001000,                $80
+            !byte 1,1
+            !byte %11001000,$0A,$4D,        $81
+            !byte 1,1,1,1,1
+            !byte %11001000,$85,$46,        $80
+            !byte 0
+SIZEOF_SFXDATA=*-SfxData
+}
 
 
 ;----------------------------------------------------------------------------
