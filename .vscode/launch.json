@@ -9,6 +9,12 @@
             "request": "launch",
             "name": "Launch Program",
             "binary": "${workspaceFolder}/.cache/hardfoam.prg",
-        }
+        },
+        {
+            "type": "asm",
+            "request": "launch",
+            "name": "SfxEdit",
+            "binary": "${workspaceFolder}/.cache/sfxedit.prg",
+        },
     ]
 }
