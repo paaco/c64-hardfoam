@@ -108,12 +108,12 @@ MainLoop:
         ; /DEBUG
 
         ; TODO: you can move the cursor up or down but not before row 0 and not after the last row
-        ; TODO: edit byte at cursor
         ; TODO: insert byte at cursor
         ; TODO: delete byte at cursor
         ; TODO: length always includes the terminating 0 (so minimum 1)
         ; TODO: offset (for multiple sounds in a single bank)
-        ; TODO: fix empty row at the bottom
+        ; TODO: fix bug empty row at the bottom
+        ; TODO: fix bug SR=00 stops displaying
 
         ; $1D=RIGHT, $9D=LEFT, $91=UP, $11=DOWN, $85=F1, $86=F3, $87=F5, $88=F7, $89=F2..
         cmp #'-'
@@ -136,11 +136,25 @@ MainLoop:
         beq MoveRight
         cmp #$9D
         beq MoveLeft
-        jmp MainLoop
+        cmp #'0'
+        bcc +
+        cmp #'9'+1
+        bcs +
+        sec
+        sbc #'0'                        ; 0..9
+        jmp EditByte
++       cmp #'A'
+        bcc +
+        cmp #'F'+1
+        bcs +
+        sec
+        sbc #'A'-10                     ; 10..15
+        jmp EditByte
++       jmp MainLoop
 
 DeleteRow:
         ldx #0                          ; TODO SfxData Row offset
-        jsr DeleteSfxData
+        jsr DeleteSfxDataRow
         jmp RedrawMainLoop
 
 InsertRow:
@@ -202,7 +216,43 @@ MoveRight:
         beq +                           ; nope
         inc CursorPos
 +       stx CursorX
+        jmp RedrawMainLoop              ; TODO hack to redraw updated byte
+
+; A=0..15
+EditByte:
+        sta ByteOffset                  ; value to update
+        ldx CursorX
+        lda ColumnFlags,x
+        and #BITS
+        tay
+        lda CursorRowMask
+        and BitFlags,y
+        bne +                           ; byte exists, so continue
+        ; TODO insert fresh byte, update mask and continue
         jmp MainLoop
++       lda ColumnFlags,x
+        and #HIGH
+        beq +                           ; not set, update LOW
+        ; update high nibble
+        asl ByteOffset
+        asl ByteOffset
+        asl ByteOffset
+        asl ByteOffset
+        ldx CursorPos
+        lda SfxData,x
+        and #$0F
+        ora ByteOffset
+        sta SfxData,x
+        ; TODO redraw current line/byte
+++      jmp MoveRight
++       ; update low nibble
+        ldx CursorPos
+        lda SfxData,x
+        and #$F0
+        ora ByteOffset
+        sta SfxData,x
+        ; TODO redraw current line/byte
+        jmp MoveRight
 
 
 ;----------------------------------------------------------------------------
@@ -405,7 +455,7 @@ InsertSfxData:
         rts
 
 ; deletes SfxRow at position X of the SfxData (clobbers A,X,Y,Mask)
-DeleteSfxData:
+DeleteSfxDataRow:
         txa
         tay                             ; Y=destination offset
         lda SfxData,x
