@@ -19,6 +19,7 @@
 !addr CursorTopOffset=$5A               ; Offset of top row# visible
 !addr CursorPos=$5B                     ; Byte position of cursor in SfxData
 !addr CursorRowMask=$5C                 ; Mask byte of row of cursor
+!addr CursorRowOffset=$5D               ; Byte position of mask on row of cursor
 ; looks like we have room at least till $70 (floating point temp storage)
 
 BLACK=0
@@ -67,6 +68,7 @@ Start:
         ldx #0
         stx CursorTopRow
         stx CursorTopOffset
+        stx CursorRowOffset
         stx CursorY
         lda SfxData,x
         sta CursorRowMask
@@ -81,6 +83,12 @@ MainLoop:
         sta RowPtr
         lda #>(SCREEN+40*3)
         sta RowPtr+1
+        lda CursorTopOffset
+        ldy #5
+        jsr PutHex
+        lda CursorRowOffset
+        ldy #8
+        jsr PutHex
         lda CursorPos
         ldy #18
         jsr PutHex
@@ -108,12 +116,9 @@ MainLoop:
         ; /DEBUG
 
         ; TODO: you can move the cursor up or down but not before row 0 and not after the last row
-        ; TODO: insert byte at cursor
-        ; TODO: delete byte at cursor
+        ; TODO: bug fix: avoid wrapping at the end?
         ; TODO: length always includes the terminating 0 (so minimum 1)
         ; TODO: offset (for multiple sounds in a single bank)
-        ; TODO: fix bug empty row at the bottom
-        ; TODO: fix bug SR=00 stops displaying
 
         ; $1D=RIGHT, $9D=LEFT, $91=UP, $11=DOWN, $85=F1, $86=F3, $87=F5, $88=F7, $89=F2..
         cmp #'-'
@@ -129,14 +134,18 @@ MainLoop:
         cmp #' '
         beq DeleteByte
         cmp #$91
-        beq MoveUp
-        cmp #$11
-        beq MoveDown
-        cmp #$1D
-        beq MoveRight
-        cmp #$9D
-        beq MoveLeft
-        cmp #'0'
+        bne +
+        jmp MoveUp
++       cmp #$11
+        bne +
+        jmp MoveDown
++       cmp #$1D
+        bne +
+        jmp MoveRight
++       cmp #$9D
+        bne +
+        jmp MoveLeft
++       cmp #'0'
         bcc +
         cmp #'9'+1
         bcs +
@@ -153,28 +162,86 @@ MainLoop:
 +       jmp MainLoop
 
 DeleteRow:
-        ldx #0                          ; TODO SfxData Row offset
+        ldx CursorRowOffset
         jsr DeleteSfxDataRow
+        ldx CursorRowOffset
+        lda SfxData,x
+        sta CursorRowMask
+        ; recalculate CursorPos, the lazy way: moves cursor back to begin of line
+        inx
+        stx CursorPos
+        lda #OFFSET_BYTES
+        sta CursorX
         jmp RedrawMainLoop
 
 InsertRow:
-        ldx #0                          ; TODO SfxData Row offset
-        lda #1                          ; Mask byte for single frame delay
+        ldx CursorRowOffset
+        lda #$01                        ; Mask byte for single frame delay
         sta CursorRowMask
         jsr InsertSfxData
+        ldx CursorRowOffset
+        inx
+        stx CursorPos
         jmp RedrawMainLoop
 
 DeleteByte:
-        inc $D020
-        jmp DeleteByte
+        ldx CursorX
+        lda ColumnFlags,x
+        and #BITS
+        tay
+        lda CursorRowMask
+        and BitFlags,y
+        beq ++                          ; no byte here, stop
+        ; update mask
+        eor CursorRowMask               ; add remaining flags back
+        bne +
+        lda #$01                        ; Mask byte for single frame delay
++       sta CursorRowMask
+        ldx CursorRowOffset
+        sta SfxData,x
+        ldx CursorPos
+        jsr DeleteSfxData
+++      jmp MoveRight
 
 MoveUp:
-        inc $D020
-        jmp MoveUp
+        lda CursorY
+        beq .scrollup
+        ; move up to previous row
+        ; TODO recalculate CursorPos etc.
+        dec CursorY
+        jmp MainLoop
+.scrollup:
+        ; scroll up to previous row
+        ; TODO recalculate CursorPos etc.
+        jmp RedrawMainLoop
 
 MoveDown:
-        inc $D020
-        jmp MoveDown
+        lda CursorY
+        cmp #TOTALROWS-1
+        bne .noscrolldown
+        inc CursorTopRow
+        ldx CursorTopOffset             ; top row
+        lda SfxData,x
+        ora #$01                        ; always skip a Mask byte
+-       beq +
+        asl
+        bcc -
+        inc CursorTopOffset
+        jmp -
+.noscrolldown:
+        inc CursorY
++       lda CursorRowMask               ; bottom row
+        ora #$01                        ; always skip a Mask byte
+-       beq +
+        asl
+        bcc -
+        inc CursorRowOffset
+        inc CursorPos
+        jmp -
++       ldx CursorRowOffset
+        lda SfxData,x
+        sta CursorRowMask
+        jmp RedrawMainLoop
 
 MoveLeft:
         ldx CursorX
@@ -228,8 +295,19 @@ EditByte:
         lda CursorRowMask
         and BitFlags,y
         bne +                           ; byte exists, so continue
-        ; TODO insert fresh byte, update mask and continue
-        jmp MainLoop
+        ; insert fresh byte at CursorPos
+        ldx CursorPos
+        lda #0                          ; fresh byte
+        jsr InsertSfxData
+        ; update mask
+        lda CursorRowMask
+        ora BitFlags,y
+        and #$FE                        ; last bit is unused when register data is present
+++      sta CursorRowMask
+        ldx CursorRowOffset
+        sta SfxData,x
+        ; continue
+        ldx CursorX
 +       lda ColumnFlags,x
         and #HIGH
         beq +                           ; not set, update LOW
@@ -322,9 +400,9 @@ OFFSET_BYTES=10
 BYTESPACING=3
 LINEWIDTH=19
 FULLLINEWIDTH=31
-; draw row# A starting at offset Y in the SfxData at RowPtr (clobbers A,X,Y,ByteOffset,Mask,SfxOffset) returns SfxOffset
+; draw row RowNumber starting at SfxOffset in SfxData at RowPtr (clobbers A,X,Y,ByteOffset,Mask,SfxOffset) increases SfxOffset
 DrawRow:
-        sty SfxOffset
+        lda RowNumber
         ldy #OFFSET_ROWNR
         jsr PutHex
         ldy SfxOffset
@@ -386,7 +464,7 @@ DrawEmptyRow:
 ;----------------------------------------------------------------------------
 
 ROWPTR=SCREEN+6*40
-TOTALROWS=17
+TOTALROWS=18
 ; draws screen (clobbers A,X,Y,RowCounter,Rownumber) (calls DrawRow, DrawEmptyRow)
 DrawScreen:
         lda #<ROWPTR
@@ -397,60 +475,50 @@ DrawScreen:
         lda #TOTALROWS
         sta RowCounter
 
-        lda #0                          ; top row#
+        lda CursorTopRow
         sta RowNumber
-        ldy #0                          ; top sound offset
+        ldy CursorTopOffset
         sty SfxOffset
--       ldy SfxOffset
-        lda RowNumber
-        jsr DrawRow
-
-        ; advance row
+-       jsr DrawRow
         lda RowPtr
         clc
         adc #40
         sta RowPtr
         bcc +
         inc RowPtr+1
-+       ldy SfxOffset
-        lda SfxData-1,y
-        beq .drawempty
-        inc RowNumber
++       inc RowNumber
         dec RowCounter
         bne -
-
-.drawempty:
-        lda RowCounter
-        beq ++
--       jsr DrawEmptyRow
-        ; advance row
-        lda RowPtr
-        clc
-        adc #40
-        sta RowPtr
-        bcc +
-        inc RowPtr+1
-+       dec RowCounter
-        bne -
-++      rts
+        rts
 
 
 ;----------------------------------------------------------------------------
 ; DATA MANAGEMENT
 ;----------------------------------------------------------------------------
 
-; inserts single byte A at position X of the SfxData (clobbers A,X,ByteOffset)
+; inserts single byte A at position X of the SfxData (clobbers X,Mask)
 InsertSfxData:
         pha                             ; store A
-        stx ByteOffset
+        stx Mask
         ldx #$FF
--       cpx ByteOffset
+-       cpx Mask
         beq +                           ; done
         dex
         lda SfxData,x
         sta SfxData+1,x
         jmp -
 +       pla
+        sta SfxData,x
+        rts
+
+; deletes byte at position X of the SfxData (clobbers X)
+DeleteSfxData:
+-       lda SfxData+1,x
+        sta SfxData,x
+        inx
+        cpx #$FF
+        bne -
+        lda #0                          ; don't read outside the page
         sta SfxData,x
         rts
 
@@ -550,7 +618,7 @@ ScreenData:
             !scr "sfxedit---------------------------------"
             !scr "f1:play/stop           .:clr +:ins -:del"
             !scr "                                        "
-            !scr " offset ??    pos ?? length ??          "
+            !scr " off ??/??    pos ??    len ??          "
             !scr "                                        "
             !scr " row mask fl fh pl ph wv ad sr          "
             !fill ScreenData+256-*,' '
