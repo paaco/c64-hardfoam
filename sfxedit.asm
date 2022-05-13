@@ -248,11 +248,16 @@ MoveDown:
         asl
         bcc -
         inc CursorRowOffset
-        inc CursorPos
+        ;inc CursorPos
         jmp -
 +       ldx CursorRowOffset
         lda SfxData,x
         sta CursorRowMask
+        ; recalculate CursorPos, the lazy way: moves cursor back to begin of line
+        inx
+        stx CursorPos
+        lda #OFFSET_BYTES
+        sta CursorX
         jmp RedrawMainLoop
 
 MoveLeft:
@@ -295,7 +300,7 @@ MoveRight:
         beq +                           ; nope
         inc CursorPos
 +       stx CursorX
-        jmp RedrawMainLoop              ; TODO hack to redraw updated byte
+        jmp RedrawMainLoop              ; TODO only redraw current row
 
 ; A=0..15
 EditByte:
@@ -333,7 +338,6 @@ EditByte:
         and #$0F
         ora ByteOffset
         sta SfxData,x
-        ; TODO redraw current line/byte
 ++      jmp MoveRight
 +       ; update low nibble
         ldx CursorPos
@@ -341,7 +345,6 @@ EditByte:
         and #$F0
         ora ByteOffset
         sta SfxData,x
-        ; TODO redraw current line/byte
         jmp MoveRight
 
 
