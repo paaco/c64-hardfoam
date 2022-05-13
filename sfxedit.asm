@@ -115,7 +115,6 @@ MainLoop:
         pla
         ; /DEBUG
 
-        ; TODO: you can move the cursor up or down but not before row 0 and not after the last row
         ; TODO: bug fix: avoid wrapping at the end?
         ; TODO: length always includes the terminating 0 (so minimum 1)
         ; TODO: offset (for multiple sounds in a single bank)
@@ -205,15 +204,28 @@ DeleteByte:
 
 MoveUp:
         lda CursorY
-        beq .scrollup
+        bne .noscrollup
+        ; scroll up to previouw row
+        ldx CursorTopOffset
+        beq ++                          ; can't go more up
+        jsr GetRowBefore
+        dec CursorTopRow
+        stx CursorTopOffset
+        jmp +
+.noscrollup:
         ; move up to previous row
-        ; TODO recalculate CursorPos etc.
         dec CursorY
-        jmp MainLoop
-.scrollup:
-        ; scroll up to previous row
-        ; TODO recalculate CursorPos etc.
-        jmp RedrawMainLoop
+        ldx CursorRowOffset
+        jsr GetRowBefore
++       stx CursorRowOffset
+        lda SfxData,x
+        sta CursorRowMask
+        ; recalculate CursorPos, the lazy way: moves cursor back to begin of line
+        inx
+        stx CursorPos
+        lda #OFFSET_BYTES
+        sta CursorX
+++      jmp RedrawMainLoop
 
 MoveDown:
         lda CursorY
@@ -223,7 +235,7 @@ MoveDown:
         ldx CursorTopOffset             ; top row
         lda SfxData,x
         ora #$01                        ; always skip a Mask byte
--       beq +
+-       beq +                           ; continue
         asl
         bcc -
         inc CursorTopOffset
@@ -545,6 +557,28 @@ DeleteSfxDataRow:
         inx
         bne .copy
 ++      rts
+
+; determine offset of row before X in SfxData (clobbers A,X,ByteOffset,SfxOffset) returns X
+GetRowBefore:
+        stx ByteOffset                  ; this is where we want to end
+        stx SfxOffset
+        cpx #0
+        beq ++                          ; no rows before
+        ldx #0
+--      stx SfxOffset                   ; "row before" offset
+        lda SfxData,x                   ; Mask byte (always there since ByteOffset>0)
+        and #$FE                        ; max 7 bytes are stored
+        inx
+-       cmp #0
+        beq +
+        asl
+        bcc -
+        inx
+        bne -
++       cpx ByteOffset
+        bne --
+++      ldx SfxOffset
+        rts
 
 
 ;----------------------------------------------------------------------------
