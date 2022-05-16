@@ -20,6 +20,8 @@
 !addr CursorPos=$5B                     ; Byte position of cursor in SfxData
 !addr CursorRowMask=$5C                 ; Mask byte of row of cursor
 !addr CursorRowOffset=$5D               ; Byte position of mask on row of cursor
+!addr SoundPlaying=$5E                  ; flag for sound enabled, doubles as repeat delay
+!addr SoundRestart=$5F                  ; place to restart sound
 ; looks like we have room at least till $70 (floating point temp storage)
 
 BLACK=0
@@ -41,12 +43,13 @@ LIGHT_GREY=15
 TEXT_COLOR=CYAN
 
 *=$0801
-!byte $0c,$08,<1974,>1974,$9e,$32,$30,$36,$31,$00,$00,$00
+!byte $0b,$08,<1974,>1974,$9e,$32,$30,$36,$31,$00,$00,$00
 
 ;----------------------------------------------------------------------------
 Start:
         ldx #0
         stx $D021
+        stx SoundPlaying
         lda #DARK_GREY
         sta $D020
 -       lda ScreenData,x
@@ -74,6 +77,40 @@ Start:
         sta CursorRowMask
         lda #1                          ; after the mask
         sta CursorPos
+
+        ; init SID
+        lda #$00
+        sta $D415                       ; Filter Cutoff Frequency: Low-Nybble
+        lda #$00
+        sta $D416                       ; Filter Cutoff Frequency: High-Byte
+        lda #%00000000                  ; RRRRX321
+        sta $D417                       ; Filter Resonance Control / Voice Input Control
+        lda #%00000000                  ; 3HBLVVVV
+        sta $D418                       ; Select Filter Mode and Volume
+
+        ; setup IRQ
+        sei
+        lda #$7f
+        sta $DC0D                       ; disable timer interrupts from CIA chips
+        sta $DD0D                       ; (used by KERNAL keyboard scanner though)
+        lda $DC0D                       ; ack pending timer interrupts from CIA chips
+        lda $DD0D
+        lda #$01
+        sta $D01A
+    RASTER=$FC
+        lda #RASTER
+        sta $D012
+        lda #$1B + (RASTER>>8)*$80
+        sta $D011
+        lda $0314
+        sta ContinueIRQ
+        lda $0315
+        sta ContinueIRQ+1
+        lda #<SoundIRQ
+        sta $0314
+        lda #>SoundIRQ
+        sta $0315
+        cli
 
 RedrawMainLoop:
         jsr DrawScreen
@@ -120,7 +157,10 @@ MainLoop:
         ; TODO: offset (for multiple sounds in a single bank)
 
         ; $1D=RIGHT, $9D=LEFT, $91=UP, $11=DOWN, $85=F1, $86=F3, $87=F5, $88=F7, $89=F2..
-        cmp #'-'
+        cmp #$85                        ; F1
+        bne +
+        jmp PlayStopSound
++       cmp #'-'
         beq DeleteRow
         cmp #'+'
         beq InsertRow
@@ -346,6 +386,25 @@ EditByte:
         ora ByteOffset
         sta SfxData,x
         jmp MoveRight
+
+PlayStopSound:
+        lda SoundPlaying
+        bne +
+        ; start sound
+        ldx CursorRowOffset
+        jsr FindSfxStart
+        stx SoundRestart
+        stx SfxPtr
+        lda #%00001111                  ; full volume, no filtering
+        sta $D418
+        inc SoundPlaying
+        jmp MainLoop
++       sei
+        lda #0
+        sta SoundPlaying                ; stop
+        sta $D418                       ; kill sound
+        cli
+        jmp MainLoop
 
 
 ;----------------------------------------------------------------------------
@@ -582,6 +641,49 @@ GetRowBefore:
         bne --
 ++      ldx SfxOffset
         rts
+
+; determine start offset of sound from rowoffset X in SfxData (clobbers A,X) returns X
+FindSfxStart:
+        ldx #0                          ; TODO determine real start, for now, just support 1 sound
+        rts
+
+
+;----------------------------------------------------------------------------
+; IRQ
+;----------------------------------------------------------------------------
+
+SoundIRQ:
+        pha
+        txa
+        pha
+        tya
+        pha
+        asl $d019                       ; acknowledge raster irq
+        dec $D020
+        lda SoundPlaying
+        beq ++
+        jsr PlaySoundFx
+        ; timed restart
+        ldy SfxPtr
+        lda SfxData,y
+        bne ++
+        inc SoundPlaying
+        lda SoundPlaying
+        cmp #20                         ; #frames between sounds
+        bne ++
+        ; restart after N frames of nothingness
+        lda #1
+        sta SoundPlaying
+        lda SoundRestart
+        sta SfxPtr
+++      inc $D020
+        pla
+        tay
+        pla
+        tax
+        pla
+ContinueIRQ=*+1
+        jmp $0000                       ; SELF-MODIFIED
 
 
 ;----------------------------------------------------------------------------
