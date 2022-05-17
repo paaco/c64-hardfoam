@@ -1,7 +1,5 @@
 ; SFX editor
 
-; TODO text in different color from digits
-
 ;constants
 !addr SCREEN=$0400
 !addr GETIN=$FFE4
@@ -87,6 +85,13 @@ Start:
         sta $D417                       ; Filter Resonance Control / Voice Input Control
         lda #%00000000                  ; 3HBLVVVV
         sta $D418                       ; Select Filter Mode and Volume
+            ;override from hardfoam
+            lda #20                     ; cutoff high
+            sta $D416
+            lda #%11111111              ; RRRRE321 reso + filter voices
+            sta $D417
+            lda #%00101111              ; 3HBLVVVV band + volume
+            sta $D418
 
         ; setup IRQ
         sei
@@ -152,15 +157,13 @@ MainLoop:
         pla
         ; /DEBUG
 
-        ; TODO: bug fix: avoid wrapping at the end?
-        ; TODO: length always includes the terminating 0 (so minimum 1)
-        ; TODO: offset (for multiple sounds in a single bank)
-
         ; $1D=RIGHT, $9D=LEFT, $91=UP, $11=DOWN, $85=F1, $86=F3, $87=F5, $88=F7, $89=F2..
         cmp #$85                        ; F1
         bne +
-        jmp PlayStopSound
-+       cmp #'-'
+--      jmp PlayStopSound
++       cmp #$8A                        ; F4 for some reason I keep pressing F4 to stop
+        beq --
+        cmp #'-'
         beq DeleteRow
         cmp #'+'
         beq InsertRow
@@ -206,11 +209,7 @@ DeleteRow:
         ldx CursorRowOffset
         lda SfxData,x
         sta CursorRowMask
-        ; recalculate CursorPos, the lazy way: moves cursor back to begin of line
-        inx
-        stx CursorPos
-        lda #OFFSET_BYTES
-        sta CursorX
+        jsr UpdateCursorPos
         jmp RedrawMainLoop
 
 InsertRow:
@@ -218,9 +217,7 @@ InsertRow:
         lda #$01                        ; Mask byte for single frame delay
         sta CursorRowMask
         jsr InsertSfxData
-        ldx CursorRowOffset
-        inx
-        stx CursorPos
+        jsr UpdateCursorPos
         jmp RedrawMainLoop
 
 DeleteByte:
@@ -260,11 +257,7 @@ MoveUp:
 +       stx CursorRowOffset
         lda SfxData,x
         sta CursorRowMask
-        ; recalculate CursorPos, the lazy way: moves cursor back to begin of line
-        inx
-        stx CursorPos
-        lda #OFFSET_BYTES
-        sta CursorX
+        jsr UpdateCursorPos
 ++      jmp RedrawMainLoop
 
 MoveDown:
@@ -288,16 +281,11 @@ MoveDown:
         asl
         bcc -
         inc CursorRowOffset
-        ;inc CursorPos
         jmp -
 +       ldx CursorRowOffset
         lda SfxData,x
         sta CursorRowMask
-        ; recalculate CursorPos, the lazy way: moves cursor back to begin of line
-        inx
-        stx CursorPos
-        lda #OFFSET_BYTES
-        sta CursorX
+        jsr UpdateCursorPos
         jmp RedrawMainLoop
 
 MoveLeft:
@@ -311,14 +299,9 @@ MoveLeft:
         and #LEFT2
         beq +
         dex
-        lda ColumnFlags,x               ; is the cursor going to a byte?
-        and #BITS
-        tay
-        lda CursorRowMask
-        and BitFlags,y
-        beq +                           ; nope
-        dec CursorPos
 +       stx CursorX
+        jsr UpdateCursorPos
+tomainloop:
         jmp MainLoop
 
 MoveRight:
@@ -326,20 +309,14 @@ MoveRight:
         lda ColumnFlags,x
         sta Mask
         and #RIGHT|RIGHT2
-        beq +                           ; not possible
+        beq tomainloop                  ; not possible
         inx
         lda Mask
         and #RIGHT2
         beq +
         inx
-        lda Mask                        ; is the cursor on a byte?
-        and #BITS
-        tay
-        lda CursorRowMask
-        and BitFlags,y
-        beq +                           ; nope
-        inc CursorPos
 +       stx CursorX
+        jsr UpdateCursorPos
         jmp RedrawMainLoop              ; TODO only redraw current row
 
 ; A=0..15
@@ -396,6 +373,8 @@ PlayStopSound:
         stx SoundRestart
         stx SfxPtr
         lda #%00001111                  ; full volume, no filtering
+            ; override from hardfoam
+            lda #%00101111              ; 3HBLVVVV band + volume
         sta $D418
         inc SoundPlaying
         jmp MainLoop
@@ -463,6 +442,28 @@ InvertCursor:
         sta (RowPtr),y
         pla
         rts
+
+; determine CursorPos from CursorRowOffset, CursorRowMask and CursorX (clobbers A,X,Y,Mask,ByteOffset)
+UpdateCursorPos:
+        ldx CursorX
+        lda ColumnFlags,x
+        and #BITS
+        sta ByteOffset                  ; 0..6
+        ldx CursorRowOffset             ; start at the mask
+        inx                             ; plus 1
+        lda CursorRowMask
+        sta Mask
+        beq +
+        lda ByteOffset
+        beq +
+-       asl Mask
+        bcc ++
+        inx                             ; count bit
+++      dec ByteOffset
+        bne -
++       stx CursorPos
+        rts
+
 
 ;----------------------------------------------------------------------------
 ; DRAW ROW
@@ -652,6 +653,7 @@ FindSfxStart:
 ; IRQ
 ;----------------------------------------------------------------------------
 
+SOUND_DELAY=50
 SoundIRQ:
         pha
         txa
@@ -669,7 +671,7 @@ SoundIRQ:
         bne ++
         inc SoundPlaying
         lda SoundPlaying
-        cmp #20                         ; #frames between sounds
+        cmp #SOUND_DELAY                ; #frames between sounds
         bne ++
         ; restart after N frames of nothingness
         lda #1
@@ -757,7 +759,7 @@ ScreenData:
             !scr "sfxedit---------------------------------"
             !scr "f1:play/stop           .:clr +:ins -:del"
             !scr "                                        "
-            !scr " off ??/??    pos ??    len ??          "
+            !scr " off ??/??    pos ??                    "
             !scr "                                        "
             !scr " row mask fl fh pl ph wv ad sr          "
             !fill ScreenData+256-*,' '
