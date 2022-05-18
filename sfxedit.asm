@@ -88,9 +88,9 @@ Start:
             ;override from hardfoam
             lda #20                     ; cutoff high
             sta $D416
-            lda #%11111111              ; RRRRE321 reso + filter voices
+            lda #%00111111              ; RRRRE321 reso + filter voices
             sta $D417
-            lda #%00101111              ; 3HBLVVVV band + volume
+            lda #%00111111              ; 3HBLVVVV band + volume
             sta $D418
 
         ; setup IRQ
@@ -790,15 +790,5 @@ ScreenData:
 *=$1000
 SfxData:
             ;     Bitmask,   FL, FH, PL, PH, WV, AD, SR
-            !byte %11111110,$0A,$4D,$00,$08,$81,$22,$F2
-            !byte 1,1
-            !byte %00001000,                $80
-            !byte 1,1
-SFX_TEST=*-SfxData
-            !byte %11001000,$0A,$4D,        $81
-            !byte 1,1,1,1,1
-            !byte %11001000,$85,$46,        $80
-SFX_NONE=*-SfxData
-            !byte 0
-
-            !fill 256,0
+            !byte %00000000,$00,$00,$00,$00,$00,$00,$00
+            !fill SfxData+256-*,0

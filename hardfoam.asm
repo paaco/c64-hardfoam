@@ -525,9 +525,9 @@ INIT:
             sta $D404
             lda #20                     ; cutoff high
             sta $D416
-            lda #%11111111              ; RRRRE321 reso + filter voices
+            lda #%00111111              ; RRRRE321 reso + filter voices
             sta $D417
-            lda #%00101111              ; 3HBLVVVV band + volume
+            lda #%00111111              ; 3HBLVVVV band + volume
             sta $D418
 }
 
@@ -1893,7 +1893,10 @@ Effect_GainD2:
 PlayFX:
             sta FxPtr
 !if AUDIO=1 {
+            ldy FxPtr
+            lda FxData,y
             sta SfxPtr                  ; set sound effect as well
+            inc FxPtr
 }
             stx FxCard
             ; set cursor for ColorCard
@@ -2839,17 +2842,20 @@ FxData:
     ;  color: $00..$0F=color, $80=draw table card, $F0..$FF=draw table card in color
     FX_UNTAP=*-FxData
     FX_GUARD=*-FxData
+    !byte SFX_BLOP
     !byte 20,$F0+WHITE
     !byte 0
     FX_GAIN_A1D1=*-FxData
     FX_GAIN_D2=*-FxData
     FX_WRAP=*-FxData
+    !byte SFX_NOTES
     !byte 20,$F0+GREEN
     !byte 20,WHITE
     !byte 10,GREEN
     !byte 20,WHITE
     !byte 0
     FX_DROPCARD=*-FxData
+    !byte SFX_DROP
     !byte 5,$80
     !byte 5,COL_SCREEN
     !byte 5,$80
@@ -2859,14 +2865,17 @@ FxData:
     !byte 5,$80
     !byte 0
     FX_HURT=*-FxData
+    !byte SFX_BOOM
     !byte 5,$F0+LIGHT_RED
     !byte 5,PURPLE
-    !byte 10,RED
+    !byte 30,RED
     !byte 0
     FX_DEATH=*-FxData
-    !byte 50,BLACK
+    !byte SFX_DEATH
+    !byte 40,BLACK
     !byte 0
     FX_ATTACK_PLAYER=*-FxData
+    !byte SFX_BOOM
     !byte 20,$80
     !byte 0
 
@@ -2878,15 +2887,50 @@ FxData:
 ; IMPORTANT: FxData and SfxData use the same starting Ptr value so they should be synced in memory
 ;            FxData duration determines when the FX finishes
 SfxData:
-            ;     Bitmask,   FL, FH, PL, PH, WV, AD, SR
-            !byte %11111110,$0A,$4D,$00,$08,$81,$22,$F2
-            !byte 1,1
-            !byte %00001000,                $80
-            !byte 1,1
-            !byte %11001000,$0A,$4D,        $81
-            !byte 1,1,1,1,1
-            !byte %11001000,$85,$46,        $80
-            !byte 0
+    ;     Bitmask,   FL, FH, PL, PH, WV, AD, SR
+SFX_DROP=*-SfxData
+    !byte $4E,$81,$81,$60,$F5
+    !byte 1,1,1,1,1,1
+    !byte $08,$80
+SFX_NONE=*-SfxData
+    !byte 0
+SFX_BLOP=*-SfxData
+    !byte $FE,$00,$18,$00,$08,$41,$21,$91
+    !byte 1,1,1
+    !byte $50,$1C,$44
+    !byte 1,1,1
+    !byte $50,$20,$11
+    !byte $08,$40
+    !byte 0
+SFX_BOOM=*-SfxData
+    !byte $4E,$08,$21,$20,$FA
+    !byte 1,1,1
+    !byte $08,$80
+    !byte 0
+SFX_DEATH=*-SfxData
+    !byte $FE,$DE,$04,$C0,$00,$41,$44,$FA
+    !byte 1,1
+    !byte $C0,$C0,$03
+    !byte 1,1
+    !byte $80,$A0
+    !byte 1,1
+    !byte $C8,$80,$08,$80
+    !byte 1,1
+    !byte $80,$00
+    !byte 0
+SFX_NOTES=*-SfxData
+    !byte $CE,$00,$10,$21,$3A,$C9
+    !byte 1,1,1
+    !byte $08,$20
+    !byte 1
+    !byte $48,$14,$21
+    !byte 1,1,1
+    !byte $08,$20
+    !byte 1
+    !byte $48,$18,$21
+    !byte 1,1,1
+    !byte $08,$20
+    !byte 0
 SIZEOF_SFXDATA=*-SfxData
 }
 
