@@ -1,8 +1,8 @@
 ; HARD FOAM - a 4K compressed card game
 ; Developed for the https://ausretrogamer.com/2022-reset64-4kb-craptastic-game-competition
 
-; TODO: proper sfx for each effect
-; TODO:  programmable filter settings?
+; TODO: implement Shield
+; TODO: implement Candy spells
 ; TODO: don't draw ATK/DEF on Spell cards
 ; TODO: on play select place on table
 ; TODO: on play select target on table (own or opponent)
@@ -12,7 +12,7 @@
 
 !ifndef DEBUG {DEBUG=0}
 !ifndef INTRO {INTRO=0}
-!ifndef AUDIO {AUDIO=1}
+!ifndef AUDIO {AUDIO=1} ; 125 bytes compressed
 !if DEBUG=1 {
     !initmem $AA
 }
@@ -256,8 +256,12 @@ DrawTextX:
             bne +
             ldx Suit
             lda SuitTextData,x
-+           tax
--           lda MacroData-1,x
++           asl                         ; MacroData only stored on even addresses so restore offset
+            tax
+            lda #>MacroData
+            adc #0                      ; add C
+            sta *+5                     ; and modify pointer
+-           lda MacroData,x             ; SELF-MODIFIED
             bpl +
             and #$7F                    ; last character
             ldx #$FF                    ; ends loop
@@ -2435,19 +2439,18 @@ Cards:
     !byte $52, $22, N_PLASTIC_CUP,   E_GUARD,      G_10
     !byte $52, $13, N_LEGO,          E_READY,      G_14
     !byte $54, $45, N_PVC,           T_NONE,       G_13
-    C_PLASTIC_WRAP=*-Cards
     !byte $12, $00, N_PLASTIC_WRAP,  E_WRAP,       G_16
     !byte $15, $00, N_PUR_FOAM,      E_GAIN_D2,    G_11
     !byte $13, $00, N_PLASTIC_KNIFE, E_HIT_4,      G_12
     C_CANDY_LEADER=*-Cards
-    !byte $E2, $02, N_CANDY_LEADER,  T_NONE,       G_LEGND_CANDY
-    !byte $61, $11, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $62, $12, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $63, $13, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $64, $14, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $65, $15, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $66, $16, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $27, $17, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $E3, $54, N_CANDY_LEADER,  E_SHIELD,     G_LEGND_CANDY
+    !byte $62, $23, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $65, $54, N_CANDY_SIS,     E_READY,      G_18
+    !byte $64, $34, N_CANDY_WAFFLE,  E_GUARD,      G_23
+    !byte $64, $14, N_SOUR_CANDY,    E_SHIELD,     G_19
+    !byte $25, $15, N_SPRINKLES,     E_GAIN_A2,    G_20
+    !byte $26, $16, N_CANDY_WRAP,    E_WRAP_2,     G_21
+    !byte $27, $17, N_MENTHOL,       E_HIT_ALL_1,  G_22
     C_SOAP_LEADER=*-Cards
     !byte $F0, $00, N_SOAP_LEADER,   T_NONE,       G_LEGND_SOAP
     !byte $71, $12, N_WANNABE,       T_NONE,       G_WANNABE
@@ -2461,9 +2464,10 @@ NUM_CARDS=(*-Cards)/5
 
 ; default decks (8 bytes each, starting with legendary)
 Decks:
+    !byte C_CANDY_LEADER,C_CANDY_LEADER+5,C_CANDY_LEADER+10,C_CANDY_LEADER+15,C_CANDY_LEADER+20,C_CANDY_LEADER+25,C_CANDY_LEADER+30,C_CANDY_LEADER+35
     !byte C_GOBLIN_LEADER,C_GOBLIN_LEADER+5,C_GOBLIN_LEADER+10,C_GOBLIN_LEADER+15,C_GOBLIN_LEADER+20,C_GOBLIN_LEADER+25,C_GOBLIN_LEADER+30,C_GOBLIN_LEADER+35
     !byte C_POLY_LEADER,C_POLY_LEADER+5,C_POLY_LEADER+10,C_POLY_LEADER+15,C_POLY_LEADER+20,C_POLY_LEADER+25,C_POLY_LEADER+30,C_POLY_LEADER+35
-    !byte C_CANDY_LEADER,C_CANDY_LEADER+5,C_CANDY_LEADER+10,C_CANDY_LEADER+15,C_CANDY_LEADER+20,C_CANDY_LEADER+25,C_CANDY_LEADER+30,C_CANDY_LEADER+35
+;    !byte C_CANDY_LEADER,C_CANDY_LEADER+5,C_CANDY_LEADER+10,C_CANDY_LEADER+15,C_CANDY_LEADER+20,C_CANDY_LEADER+25,C_CANDY_LEADER+30,C_CANDY_LEADER+35
     !byte C_SOAP_LEADER,C_SOAP_LEADER+5,C_SOAP_LEADER+10,C_SOAP_LEADER+15,C_SOAP_LEADER+20,C_SOAP_LEADER+25,C_SOAP_LEADER+30,C_SOAP_LEADER+35
 
 
@@ -2548,21 +2552,21 @@ GlyphData:
     !byte 87,87,102
     !byte 226,75,102
     G_19=*-GlyphData
-    !byte 77,78,223
+    !byte 233,78,223
     !byte 78,78,78
-    !byte 95,78,77
+    !byte 95,78,105
     G_20=*-GlyphData
-    !byte 83,32,83
-    !byte 83,83,83
-    !byte 32,83,32
+    !byte 58,43,46
+    !byte 46,58,58
+    !byte 58,46,43
     G_21=*-GlyphData
-    !byte 85,68,73
-    !byte 71,87,72
-    !byte 74,70,75
+    !byte 77,119,78
+    !byte 116,32,106
+    !byte 78,111,77
     G_22=*-GlyphData
-    !byte 1,2,3
-    !byte 4,5,6
-    !byte 7,8,78
+    !byte 108,160,123
+    !byte 244,158,234
+    !byte 95,158,105
     G_23=*-GlyphData
     !byte 240,242,238
     !byte 235,219,243
@@ -2630,6 +2634,8 @@ TextData:
     !byte M_READY,0
     E_GUARD=*-TextData ; Card blocks
     !byte M_GUARD,0
+    E_SHIELD=*-TextData ; Card is shielded
+    !byte M_SHIELD,0
     E_HIT_3=*-TextData ; Hit (enemy) for 3
     !byte M_HIT,M_FOR,M_A3,0
     E_HIT_2x2=*-TextData ; Hit 2x (enemy) for 2
@@ -2644,6 +2650,14 @@ TextData:
     E_GAIN_D2=*-TextData ; Add D2 to own
     E_INT_GAIN_D2=*-TextData+1
     !byte M_ALL,M_YOUR,M_GAIN,M_D2,0
+    E_GAIN_A2=*-TextData ; Add A2 to own
+    E_INT_GAIN_A2=*-TextData+1
+    !byte M_ALL,M_YOUR,M_GAIN,M_A2,0
+    E_WRAP_2=*-TextData ; Add 3x Shield
+    E_INT_WRAP_2=*-TextData+1
+    !byte M_GIVE,M_3X,M_SHIELD,0
+    E_HIT_ALL_1=*-TextData ; Hit all for 1
+    !byte M_HIT,M_ALL,M_FOR,M_A1,0
     T_YOUR_OPPONENT_IS=*-TextData
     !byte M_YOUR,M_OPPONENT,M_IS
     T_OPPONENT_NAME=*-TextData
@@ -2678,6 +2692,18 @@ TextData:
     !byte M_PUR,M_FOAM,0
     N_PLASTIC_KNIFE=*-TextData
     !byte M_PLASTIC,M_KNIFE,0
+    N_CANDY_SIS=*-TextData
+    !byte M_CANDY,M_SIS,0
+    N_CANDY_WAFFLE=*-TextData
+    !byte M_CANDY,M_WAFFLE,0
+    N_SOUR_CANDY=*-TextData
+    !byte M_SOUR,M_CANDY,0
+    N_SPRINKLES=*-TextData
+    !byte 0;TODO M_SPRINKLES,0
+    N_CANDY_WRAP=*-TextData
+    !byte M_CANDY,M_WRAP,0
+    N_MENTHOL=*-TextData
+    !byte 0;TODO M_MENTHOL,0
 !if *-TextData >= $FF { !error "Out of TextData memory" }
 ; Additional effects - make sure they don't map to any string used as CARD_EFFECT (i.e. 2 or 15)
 E_INT_ATTACKPLAYER=3
@@ -2688,60 +2714,125 @@ E_INT_DEADCARD=7
 E_INT_HIT=8
 
 ; Text macros, each ends with a byte >= $80
+!align 1,0,0
 MacroData:
+    !byte 0,0
     M_SUIT=2 ; is replaced by current suit name
-    M_GOBLIN      =*-MacroData+1 : !scr "gobli",'n'+$80
-    M_POLYSTYRENE =*-MacroData+1 : !scr "polystyren",'e'+$80
-    M_CANDY       =*-MacroData+1 : !scr "cand",'y'+$80
-    M_SOAP        =*-MacroData+1 : !scr "soa",'p'+$80
-    M_HARD        =*-MacroData+1 : !scr "har",'d'+$80
-    M_LEGENDARY   =*-MacroData+1 : !scr "legendar",'y'+$80
-    M_LEADER      =*-MacroData+1 : !scr "leade",'r'+$80
-    M_WANNABE     =*-MacroData+1 : !scr "wannab",'e'+$80
-    M_FOAM        =*-MacroData+1 : !scr "foa",'m'+$80
-    M_FOREVER     =*-MacroData+1 : !scr "foreve",'r'+$80
-    M_BLOCK       =*-MacroData+1 : !scr "bloc",'k'+$80
-    M_YOUR        =*-MacroData+1 : !scr "you",'r'+$80
-    M_OPPONENT    =*-MacroData+1 : !scr "opponen",'t'+$80
-    M_IS          =*-MacroData+1 : !scr "i",'s'+$80
-    M_OPPONENT_NAME=*-MacroData+1
+    M_GOBLIN      =(*-MacroData)>>1 : !scr "gobli",'n'+$80
+!align 1,0,0
+    M_POLYSTYRENE =(*-MacroData)>>1 : !scr "polystyren",'e'+$80
+!align 1,0,0
+    M_CANDY       =(*-MacroData)>>1 : !scr "cand",'y'+$80
+!align 1,0,0
+    M_SOAP        =(*-MacroData)>>1 : !scr "soa",'p'+$80
+!align 1,0,0
+    M_HARD        =(*-MacroData)>>1 : !scr "har",'d'+$80
+!align 1,0,0
+    M_LEGENDARY   =(*-MacroData)>>1 : !scr "legendar",'y'+$80
+!align 1,0,0
+    M_LEADER      =(*-MacroData)>>1 : !scr "leade",'r'+$80
+!align 1,0,0
+    M_WANNABE     =(*-MacroData)>>1 : !scr "wannab",'e'+$80
+!align 1,0,0
+    M_FOAM        =(*-MacroData)>>1 : !scr "foa",'m'+$80
+!align 1,0,0
+    M_FOREVER     =(*-MacroData)>>1 : !scr "foreve",'r'+$80
+!align 1,0,0
+    M_BLOCK       =(*-MacroData)>>1 : !scr "bloc",'k'+$80
+!align 1,0,0
+    M_YOUR        =(*-MacroData)>>1 : !scr "you",'r'+$80
+!align 1,0,0
+    M_OPPONENT    =(*-MacroData)>>1 : !scr "opponen",'t'+$80
+!align 1,0,0
+    M_IS          =(*-MacroData)>>1 : !scr "i",'s'+$80
+!align 1,0,0
+    M_OPPONENT_NAME=(*-MacroData)>>1
 opponent_name1:                    !scr "a."        ; SELF-MODIFIED
 opponent_name2:                    !scr "p",'.'+$80 ; SELF-MODIFIED
-    M_2SPACES     =*-MacroData+1 : !scr " ",' '+$80
-    M_PICK        =*-MacroData+1 : !scr "pic",'k'+$80
-    M_A           =*-MacroData+1 : !scr 'a'+$80
-    M_DECK        =*-MacroData+1 : !scr "dec",'k'+$80
-    M_END         =*-MacroData+1 : !scr "en",'d'+$80
-    M_ALL         =*-MacroData+1 : !scr "al",'l'+$80
-    M_AND         =*-MacroData+1 : !scr "an",'d'+$80
-    M_GAIN        =*-MacroData+1 : !scr "gai",'n'+$80
-    M_A2          =*-MacroData+1 : !scr CHR_ATK,'2'+$80
-    M_A3          =*-MacroData+1 : !scr CHR_ATK,'3'+$80
-    M_A4          =*-MacroData+1 : !scr CHR_ATK,'4'+$80
-    M_A1D1        =*-MacroData+1 : !scr CHR_ATK,'1',CHR_DEF,'1'+$80
-    M_D2          =*-MacroData+1 : !scr CHR_DEF,'2'+$80
-    M_D3          =*-MacroData+1 : !scr CHR_DEF,'3'+$80
-    M_READY       =*-MacroData+1 : !scr "read",'y'+$80
-    M_GUARD       =*-MacroData+1 : !scr "guar",'d'+$80
-    M_GIVE        =*-MacroData+1 : !scr "giv",'e'+$80
-    M_HIT         =*-MacroData+1 : !scr "hi",'t'+$80
-    M_2X          =*-MacroData+1 : !scr "2",'x'+$80
-    M_FOR         =*-MacroData+1 : !scr "fo",'r'+$80
-    M_SHIELDMASTA =*-MacroData+1 : !scr "shieldmast",'a'+$80
-    M_GRUNT       =*-MacroData+1 : !scr "grun",'t'+$80
-    M_BRUISER     =*-MacroData+1 : !scr "bruise",'r'+$80
-    M_BOMB        =*-MacroData+1 : !scr "bom",'b'+$80
-    M_FIRE        =*-MacroData+1 : !scr "fir",'e'+$80
-    M_ROCKET      =*-MacroData+1 : !scr "rocke",'t'+$80
-    M_PLASTIC     =*-MacroData+1 : !scr "plasti",'c'+$80
-    M_CUP         =*-MacroData+1 : !scr "cu",'p'+$80
-    M_LEGO        =*-MacroData+1 : !scr "leg",'o'+$80
-    M_PVC         =*-MacroData+1 : !scr "pv",'c'+$80
-    M_WRAP        =*-MacroData+1 : !scr "wra",'p'+$80
-    M_PUR         =*-MacroData+1 : !scr "pu",'r'+$80
-    M_KNIFE       =*-MacroData+1 : !scr "knif",'e'+$80
-!if *-MacroData >= $FF { !error "Out of MacroData memory" }
-    !byte *-MacroData ; DEBUG
+!align 1,0,0
+    M_2SPACES     =(*-MacroData)>>1 : !scr " ",' '+$80
+!align 1,0,0
+    M_PICK        =(*-MacroData)>>1 : !scr "pic",'k'+$80
+!align 1,0,0
+    M_A           =(*-MacroData)>>1 : !scr 'a'+$80
+!align 1,0,0
+    M_DECK        =(*-MacroData)>>1 : !scr "dec",'k'+$80
+!align 1,0,0
+    M_END         =(*-MacroData)>>1 : !scr "en",'d'+$80
+!align 1,0,0
+    M_ALL         =(*-MacroData)>>1 : !scr "al",'l'+$80
+!align 1,0,0
+    M_AND         =(*-MacroData)>>1 : !scr "an",'d'+$80
+!align 1,0,0
+    M_GAIN        =(*-MacroData)>>1 : !scr "gai",'n'+$80
+!align 1,0,0
+    M_A1          =(*-MacroData)>>1 : !scr CHR_ATK,'1'+$80
+!align 1,0,0
+    M_A2          =(*-MacroData)>>1 : !scr CHR_ATK,'2'+$80
+!align 1,0,0
+    M_A3          =(*-MacroData)>>1 : !scr CHR_ATK,'3'+$80
+!align 1,0,0
+    M_A4          =(*-MacroData)>>1 : !scr CHR_ATK,'4'+$80
+!align 1,0,0
+    M_A1D1        =(*-MacroData)>>1 : !scr CHR_ATK,'1',CHR_DEF,'1'+$80
+!align 1,0,0
+    M_D2          =(*-MacroData)>>1 : !scr CHR_DEF,'2'+$80
+!align 1,0,0
+    M_D3          =(*-MacroData)>>1 : !scr CHR_DEF,'3'+$80
+!align 1,0,0
+    M_READY       =(*-MacroData)>>1 : !scr "read",'y'+$80
+!align 1,0,0
+    M_GUARD       =(*-MacroData)>>1 : !scr "guar",'d'+$80
+!align 1,0,0
+    M_SHIELD      =(*-MacroData)>>1 : !scr "shiel",'d'+$80
+!align 1,0,0
+    M_GIVE        =(*-MacroData)>>1 : !scr "giv",'e'+$80
+!align 1,0,0
+    M_HIT         =(*-MacroData)>>1 : !scr "hi",'t'+$80
+!align 1,0,0
+    M_2X          =(*-MacroData)>>1 : !scr "2",'x'+$80
+!align 1,0,0
+    M_3X          =(*-MacroData)>>1 : !scr "3",'x'+$80
+!align 1,0,0
+    M_FOR         =(*-MacroData)>>1 : !scr "fo",'r'+$80
+!align 1,0,0
+    M_SHIELDMASTA =(*-MacroData)>>1 : !scr "shieldmast",'a'+$80
+!align 1,0,0
+    M_GRUNT       =(*-MacroData)>>1 : !scr "grun",'t'+$80
+!align 1,0,0
+    M_BRUISER     =(*-MacroData)>>1 : !scr "bruise",'r'+$80
+!align 1,0,0
+    M_BOMB        =(*-MacroData)>>1 : !scr "bom",'b'+$80
+!align 1,0,0
+    M_FIRE        =(*-MacroData)>>1 : !scr "fir",'e'+$80
+!align 1,0,0
+    M_ROCKET      =(*-MacroData)>>1 : !scr "rocke",'t'+$80
+!align 1,0,0
+    M_PLASTIC     =(*-MacroData)>>1 : !scr "plasti",'c'+$80
+!align 1,0,0
+    M_CUP         =(*-MacroData)>>1 : !scr "cu",'p'+$80
+!align 1,0,0
+    M_LEGO        =(*-MacroData)>>1 : !scr "leg",'o'+$80
+!align 1,0,0
+    M_PVC         =(*-MacroData)>>1 : !scr "pv",'c'+$80
+!align 1,0,0
+    M_WRAP        =(*-MacroData)>>1 : !scr "wra",'p'+$80
+!align 1,0,0
+    M_PUR         =(*-MacroData)>>1 : !scr "pu",'r'+$80
+!align 1,0,0
+    M_KNIFE       =(*-MacroData)>>1 : !scr "knif",'e'+$80
+!align 1,0,0
+    M_SIS         =(*-MacroData)>>1 : !scr "si",'s'+$80
+!align 1,0,0
+    M_WAFFLE      =(*-MacroData)>>1 : !scr "waffl",'e'+$80
+!align 1,0,0
+    M_SOUR        =(*-MacroData)>>1 : !scr "sou",'r'+$80
+!align 1,0,0
+    M_SPRINKLES   =(*-MacroData)>>1 : !scr "sprinkle",'s'+$80
+!align 1,0,0
+    M_MENTHOL     =(*-MacroData)>>1 : !scr "mentho",'l'+$80
+!if *-MacroData >= $1FF { !error "Out of MacroData memory" }
+    !word (*-MacroData) ; DEBUG
 
 AINames:
     !scr "bd","jt","mg","rh"
@@ -2823,12 +2914,12 @@ frame_DEF2: !byte 160
 frame_ATK3: !byte 160
     !byte 160,CHR_DEF|$80
 frame_DEF3: !byte 160
-    ; FRAME_SHIELD=*-FrameData            ; 5x5 Shield card frame
-    ; !byte 255,119,119,119,127
-    ; !byte 116,96,96,96,106
-    ; !byte 116,96,96,96,106
-    ; !byte 116,96,96,96,106
-    ; !byte 127,111,111,111,255
+    FRAME_SHIELD=*-FrameData            ; 5x5 Shield card frame
+    !byte 255,119,119,119,127
+    !byte 116,96,96,96,106
+    !byte 116,96,96,96,106
+    !byte 116,96,96,96,106
+    !byte 127,111,111,111,255
 
 
 ;----------------------------------------------------------------------------
@@ -2842,20 +2933,26 @@ FxData:
     ;  color: $00..$0F=color, $80=draw table card, $F0..$FF=draw table card in color
     FX_UNTAP=*-FxData
     FX_GUARD=*-FxData
+!if AUDIO=1 {
     !byte SFX_BLOP
+}
     !byte 20,$F0+WHITE
     !byte 0
     FX_GAIN_A1D1=*-FxData
     FX_GAIN_D2=*-FxData
     FX_WRAP=*-FxData
+!if AUDIO=1 {
     !byte SFX_NOTES
+}
     !byte 20,$F0+GREEN
     !byte 20,WHITE
     !byte 10,GREEN
     !byte 20,WHITE
     !byte 0
     FX_DROPCARD=*-FxData
+!if AUDIO=1 {
     !byte SFX_DROP
+}
     !byte 5,$80
     !byte 5,COL_SCREEN
     !byte 5,$80
@@ -2865,17 +2962,23 @@ FxData:
     !byte 5,$80
     !byte 0
     FX_HURT=*-FxData
+!if AUDIO=1 {
     !byte SFX_BOOM
+    }
     !byte 5,$F0+LIGHT_RED
     !byte 5,PURPLE
     !byte 30,RED
     !byte 0
     FX_DEATH=*-FxData
+!if AUDIO=1 {
     !byte SFX_DEATH
+    }
     !byte 40,BLACK
     !byte 0
     FX_ATTACK_PLAYER=*-FxData
+!if AUDIO=1 {
     !byte SFX_BOOM
+    }
     !byte 20,$80
     !byte 0
 
