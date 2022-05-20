@@ -1,12 +1,11 @@
 ; HARD FOAM - a 4K compressed card game
 ; Developed for the https://ausretrogamer.com/2022-reset64-4kb-craptastic-game-competition
 
-; TODO: implement Shield
 ; TODO: implement Candy spells
+; TODO: 14+1 free deck selector
 ; TODO: don't draw ATK/DEF on Spell cards
 ; TODO: on play select place on table
 ; TODO: on play select target on table (own or opponent)
-; TODO: 14+1 free deck selector
 ; TODO: decide on logo (adds at least 200 bytes packed)
 ; TODO: experimenting with _Draw vs specific functions showed 2x speedup (maybe more)
 
@@ -1734,7 +1733,16 @@ Effect_Attack:
 ; subtract Source ATK from Param (table-card)'s DEF, clamping at 0
 Effect_AttackCard:
             ldx EfParam                 ; target table-card
-            lda TD_DEF,x
+            lda TD_STATUS,x
+            and #STATUS_SHIELD
+            beq ++
+            ; unshield
+            lda TD_STATUS,x
+            and #255-STATUS_SHIELD
+            sta TD_STATUS,x
+            lda #FX_UNSHIELD
+            jmp PlayFX
+++          lda TD_DEF,x
             ldy EfSource                ; table-card
             sec
             sbc TD_ATK,y
@@ -1807,7 +1815,16 @@ Effect_DeadCard:
             lda TD_CARD,x
             cmp #$FF
             beq .stealrts5              ; fizzle
-            lda TD_DEF,x
+            lda TD_STATUS,x
+            and #STATUS_SHIELD
+            beq ++
+            ; unshield
+            lda TD_STATUS,x
+            and #25-STATUS_SHIELD
+            sta TD_STATUS,x
+            lda #FX_UNSHIELD
+            jmp PlayFX
+++          lda TD_DEF,x
             sec
             sbc EfParam                 ; damage
             bpl ++
@@ -2472,14 +2489,14 @@ Cards:
     !byte $15, $00, N_PUR_FOAM,      E_GAIN_D2,    G_11
     !byte $13, $00, N_PLASTIC_KNIFE, E_HIT_4,      G_12
     C_CANDY_LEADER=*-Cards
-    !byte $E3, $54, N_CANDY_LEADER,  E_SHIELD,     G_LEGND_CANDY
+    !byte $E3, $44, N_CANDY_LEADER,  E_SHIELD,     G_LEGND_CANDY
     !byte $62, $23, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $65, $54, N_CANDY_SIS,     E_READY,      G_18
-    !byte $64, $34, N_CANDY_WAFFLE,  E_GUARD,      G_23
-    !byte $64, $14, N_SOUR_CANDY,    E_SHIELD,     G_19
-    !byte $25, $15, N_SPRINKLES,     E_GAIN_A2,    G_20
-    !byte $26, $16, N_CANDY_WRAP,    E_WRAP_2,     G_21
-    !byte $27, $17, N_MENTHOL,       E_HIT_ALL_1,  G_22
+    !byte $65, $54, N_CANDY_SIS,     E_GUARD,      G_18
+    !byte $63, $34, N_CANDY_WAFFLE,  T_NONE ,      G_23
+    !byte $62, $22, N_SOUR_CANDY,    E_SHIELD,     G_19
+    !byte $24, $00, N_SPRINKLES,     E_GAIN_A2,    G_20
+    !byte $22, $00, N_CANDY_WRAP,    E_WRAP_2,     G_21
+    !byte $23, $00, N_MENTHOL,       E_HIT_ALL_1,  G_22
     C_SOAP_LEADER=*-Cards
     !byte $F0, $00, N_SOAP_LEADER,   T_NONE,       G_LEGND_SOAP
     !byte $71, $12, N_WANNABE,       T_NONE,       G_WANNABE
@@ -2728,11 +2745,11 @@ TextData:
     N_SOUR_CANDY=*-TextData
     !byte M_SOUR,M_CANDY,0
     N_SPRINKLES=*-TextData
-    !byte 0;TODO M_SPRINKLES,0
+    !byte M_SPRINKLES,0
     N_CANDY_WRAP=*-TextData
     !byte M_CANDY,M_WRAP,0
     N_MENTHOL=*-TextData
-    !byte 0;TODO M_MENTHOL,0
+    !byte M_MENTHOL,0
 !if *-TextData >= $FF { !error "Out of TextData memory" }
 ; Additional effects - make sure they don't map to any string used as CARD_EFFECT (i.e. 2 or 15)
 E_INT_ATTACKPLAYER=3
@@ -2966,7 +2983,7 @@ FxData:
     ;  color: $00..$0F=color, $80=draw table card, $F0..$FF=draw table card in color
     FX_UNTAP=*-FxData
     FX_GUARD=*-FxData
-    FX_SHIELD=*-FxData
+    FX_UNSHIELD=*-FxData
 !if AUDIO=1 {
     !byte SFX_BLOP
 }
@@ -2975,6 +2992,7 @@ FxData:
     FX_GAIN_A1D1=*-FxData
     FX_GAIN_D2=*-FxData
     FX_WRAP=*-FxData
+    FX_SHIELD=*-FxData
 !if AUDIO=1 {
     !byte SFX_NOTES
 }
@@ -3045,15 +3063,9 @@ SFX_BOOM=*-SfxData
     !byte $08,$80
     !byte 0
 SFX_DEATH=*-SfxData
-    !byte $FE,$DE,$04,$C0,$00,$41,$44,$FA
-    !byte 1,1
-    !byte $C0,$C0,$03
-    !byte 1,1
-    !byte $80,$A0
-    !byte 1,1
-    !byte $C8,$80,$08,$80
-    !byte 1,1
-    !byte $80,$00
+    !byte $CE,$00,$07,$21,$90,$FA
+    !byte 1,1,1,1,1,1,1,1,1,1,1
+    !byte $08,$80
     !byte 0
 SFX_NOTES=*-SfxData
     !byte $CE,$00,$10,$21,$3A,$C9
