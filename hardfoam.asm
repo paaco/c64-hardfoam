@@ -1644,6 +1644,17 @@ Effect_Guard:
             lda #FX_GUARD
             jmp PlayFX
 
++           cmp #E_SHIELD
+            bne +
+; add shield status
+Effect_Shield:
+            ldx EfSource                ; table-card
+            lda TD_STATUS,x
+            ora #STATUS_SHIELD
+            sta TD_STATUS,x
+            lda #FX_SHIELD
+            jmp PlayFX
+
 +           cmp #E_ALL_GAIN_A1D1
             bne +
 Effect_AuraAllGain11:
@@ -2164,6 +2175,9 @@ DrawTableCard:
             lda #$24                    ; BIT
             sta .fixupcolorwrite        ; disable color write
 +           lda TD_STATUS,y
+            and #STATUS_SHIELD
+            bne .shield
+            lda TD_STATUS,y
             and #STATUS_GUARD
             bne .guard
             ; regular card
@@ -2174,6 +2188,19 @@ DrawTableCard:
             ldy #40
             jsr DrawWithOffset
             lda #FRAME_TABLE_CARD
+            ldx #CFG_FRAME
+            jsr Draw
+            pla
+            tax                         ; restore card to X
+            bne .setatkdef              ; always
+.shield:    ; shielded card
+            tya                         ; backup card in Y
+            pha
+            lda Cards+CARD_GLYPH,x
+            ldx #CFG_GLYPH
+            ldy #40
+            jsr DrawWithOffset
+            lda #FRAME_SHIELD
             ldx #CFG_FRAME
             jsr Draw
             pla
@@ -2244,6 +2271,7 @@ DecorateBottomFrame:
             sta frame_DEF  ; Regular frame
             sta frame_DEF2 ; Table card frame
             sta frame_DEF3 ; Guard frame
+            sta frame_DEF4 ; Shield frame
             lda Cards+CARD_ATDF,x
             lsr
             lsr
@@ -2253,6 +2281,7 @@ DecorateBottomFrame:
             sta frame_ATK
             sta frame_ATK2
             sta frame_ATK3
+            sta frame_ATK4
             ; fall through
 
 ; sets CharCol and SuitCol according to card in X (clobbers A)
@@ -2920,6 +2949,10 @@ frame_DEF3: !byte 160
     !byte 116,96,96,96,106
     !byte 116,96,96,96,106
     !byte 127,111,111,111,255
+    !byte CHR_ATK|$80
+frame_ATK4: !byte 160
+    !byte 160,CHR_DEF|$80
+frame_DEF4: !byte 160
 
 
 ;----------------------------------------------------------------------------
@@ -2933,6 +2966,7 @@ FxData:
     ;  color: $00..$0F=color, $80=draw table card, $F0..$FF=draw table card in color
     FX_UNTAP=*-FxData
     FX_GUARD=*-FxData
+    FX_SHIELD=*-FxData
 !if AUDIO=1 {
     !byte SFX_BLOP
 }
@@ -3055,6 +3089,7 @@ EQueueParam:
 ; LOGO INTRO SCREEN
 ;----------------------------------------------------------------------------
 
+!if INTRO=1 {
 Logo:
             jsr .drawlogo
             ; set ptrs to lower part ($0659)
@@ -3102,7 +3137,7 @@ Logo:
 -           jsr ReadJoystick
             beq -
             ; fall through
-
+}
 LogoDone:
             ; set color of counters
             ldx #3-1
@@ -3115,7 +3150,7 @@ LogoDone:
             dex
             bpl -
             jmp Start
-
+!if INTRO=1 {
 .fixtwainpain:
             ldx #15
             lda #COL_LEGEND
@@ -3175,6 +3210,6 @@ logo:       !byte %01100110,%00111110,%01111110,%11111110
             !byte %11111100,%11100111,%11111111,%11011011
             !byte %11100000,%11100111,%11100111,%11000011
             !byte %01100000,%01111110,%01100110,%11000110
-
+}
 
 ;----------------------------------------------------------------------------
