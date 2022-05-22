@@ -1657,26 +1657,15 @@ Effect_Shield:
 +           cmp #E_ALL_GAIN_A1D1
             bne +
 Effect_AuraAllGain11:
-; for each card on table (not Source) that matches Suit of Source post effect
-            sta EfParam
-            ldx EfSource                ; table-card
-            ldy TD_CARD,x
-            lda Cards+CARD_LTSC,y
-            and #%00110000              ; LTSSCCCC SS=Suit(0,1,2,3)
-            sta Tmp3                    ; Suit
-            txa
+; for each card on table post effect E_INT_GAIN_A1D1
+            sta EfParam                 ; TODO unnecessary, but removing makes alz longer...
+            lda EfSource                ; table-card
             and #$80
             ora #PlayerData+PD_TABLE
             tax                         ; first table-card
-            cpx EfSource
-            beq ++                      ; skip self
 -           ldy TD_CARD,x
             cpy #$FF                    ; empty
             beq ++
-            lda Cards+CARD_LTSC,y
-            and #%00110000              ; LTSSCCCC SS=Suit(0,1,2,3)
-            cmp Tmp3
-            bne ++                      ; skip wrong suit
             lda #E_INT_GAIN_A1D1
             jsr QueueEffect
 ++          txa
@@ -1820,7 +1809,7 @@ Effect_DeadCard:
             beq ++
             ; unshield
             lda TD_STATUS,x
-            and #25-STATUS_SHIELD
+            and #255-STATUS_SHIELD
             sta TD_STATUS,x
             lda #FX_UNSHIELD
             jmp PlayFX
@@ -2471,7 +2460,7 @@ SIZEOF_CARD=5       ; 256/5 => 50 cards max (0 and $FF are used for other purpos
 Cards:
     !byte 0 ; card# (offsets) should not be 0
     C_GOBLIN_LEADER=*-Cards
-    !byte $C3, $34, N_GOBLIN_LEADER, E_ALL_GAIN_A1D1, G_LEGND_GOBLIN
+    !byte $C3, $33, N_GOBLIN_LEADER, E_ALL_GAIN_A1D1, G_LEGND_GOBLIN
     !byte $41, $11, N_WANNABE,       E_READY,      G_WANNABE
     !byte $44, $35, N_SHIELDMASTA,   E_GUARD,      G_3
     !byte $42, $32, N_GRUNT,         T_NONE,       G_4
@@ -2480,7 +2469,7 @@ Cards:
     !byte $03, $00, N_GOBLIN_ROCKET, E_HIT_2x2,    G_ROCKET
     !byte $05, $00, N_GOBLIN_FIRE,   E_HIT_ALL_2,  G_FIRE
     C_POLY_LEADER=*-Cards
-    !byte $D3, $07, N_POLY_LEADER,   E_GUARD,      G_LEGND_POLY
+    !byte $D3, $09, N_POLY_LEADER,   E_GUARD,      G_LEGND_POLY
     !byte $51, $12, N_WANNABE,       T_NONE,       G_WANNABE
     !byte $52, $22, N_PLASTIC_CUP,   E_GUARD,      G_10
     !byte $52, $13, N_LEGO,          E_READY,      G_14
@@ -2510,10 +2499,10 @@ NUM_CARDS=(*-Cards)/5
 
 ; default decks (8 bytes each, starting with legendary)
 Decks:
-    !byte C_CANDY_LEADER,C_CANDY_LEADER+5,C_CANDY_LEADER+10,C_CANDY_LEADER+15,C_CANDY_LEADER+20,C_CANDY_LEADER+25,C_CANDY_LEADER+30,C_CANDY_LEADER+35
+    ; !byte C_CANDY_LEADER,C_CANDY_LEADER+5,C_CANDY_LEADER+10,C_CANDY_LEADER+15,C_CANDY_LEADER+20,C_CANDY_LEADER+25,C_CANDY_LEADER+30,C_CANDY_LEADER+35
     !byte C_GOBLIN_LEADER,C_GOBLIN_LEADER+5,C_GOBLIN_LEADER+10,C_GOBLIN_LEADER+15,C_GOBLIN_LEADER+20,C_GOBLIN_LEADER+25,C_GOBLIN_LEADER+30,C_GOBLIN_LEADER+35
     !byte C_POLY_LEADER,C_POLY_LEADER+5,C_POLY_LEADER+10,C_POLY_LEADER+15,C_POLY_LEADER+20,C_POLY_LEADER+25,C_POLY_LEADER+30,C_POLY_LEADER+35
-;    !byte C_CANDY_LEADER,C_CANDY_LEADER+5,C_CANDY_LEADER+10,C_CANDY_LEADER+15,C_CANDY_LEADER+20,C_CANDY_LEADER+25,C_CANDY_LEADER+30,C_CANDY_LEADER+35
+    !byte C_CANDY_LEADER,C_CANDY_LEADER+5,C_CANDY_LEADER+10,C_CANDY_LEADER+15,C_CANDY_LEADER+20,C_CANDY_LEADER+25,C_CANDY_LEADER+30,C_CANDY_LEADER+35
     !byte C_SOAP_LEADER,C_SOAP_LEADER+5,C_SOAP_LEADER+10,C_SOAP_LEADER+15,C_SOAP_LEADER+20,C_SOAP_LEADER+25,C_SOAP_LEADER+30,C_SOAP_LEADER+35
 
 
@@ -2675,7 +2664,7 @@ TextData:
     !byte M_SUIT,M_WANNABE,0
     E_ALL_GAIN_A1D1=*-TextData ; All other cards of the same suit gain A1/D1
     E_INT_GAIN_A1D1=*-TextData+1
-    !byte M_ALL,M_SUIT,M_GAIN,M_A1D1,0
+    !byte M_ALL,M_YOUR,M_GAIN,M_A1D1,0
     E_READY=*-TextData ; Card has no summoning sickness
     !byte M_READY,0
     E_GUARD=*-TextData ; Card blocks
@@ -2983,7 +2972,6 @@ FxData:
     ;  color: $00..$0F=color, $80=draw table card, $F0..$FF=draw table card in color
     FX_UNTAP=*-FxData
     FX_GUARD=*-FxData
-    FX_UNSHIELD=*-FxData
 !if AUDIO=1 {
     !byte SFX_BLOP
 }
@@ -3014,6 +3002,7 @@ FxData:
     !byte 5,$80
     !byte 0
     FX_HURT=*-FxData
+    FX_UNSHIELD=*-FxData
 !if AUDIO=1 {
     !byte SFX_BOOM
     }
@@ -3070,15 +3059,15 @@ SFX_DEATH=*-SfxData
 SFX_NOTES=*-SfxData
     !byte $CE,$00,$10,$21,$3A,$C9
     !byte 1,1,1
-    !byte $08,$20
+    !byte $08,$10
     !byte 1
-    !byte $48,$14,$21
+    !byte $48,$15,$21
     !byte 1,1,1
-    !byte $08,$20
+    !byte $08,$10
     !byte 1
-    !byte $48,$18,$21
+    !byte $48,$1A,$21
     !byte 1,1,1
-    !byte $08,$20
+    !byte $08,$10
     !byte 0
 SIZEOF_SFXDATA=*-SfxData
 }
