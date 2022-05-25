@@ -1,7 +1,7 @@
 ; HARD FOAM - a 4K compressed card game
 ; Developed for the https://ausretrogamer.com/2022-reset64-4kb-craptastic-game-competition
 
-; TODO: implement Candy spells
+; TODO: implement remaining Candy and Soap spells
 ; TODO: 14+1 free deck selector
 ; TODO: don't draw ATK/DEF on Spell cards
 ; TODO: on play select place on table
@@ -1656,17 +1656,19 @@ Effect_Shield:
 
 +           cmp #E_ALL_GAIN_A1D1
             bne +
-Effect_AuraAllGain11:
-; for each card on table post effect E_INT_GAIN_A1D1
-            sta EfParam                 ; TODO unnecessary, but removing makes alz longer...
-            lda EfSource                ; table-card
-            and #$80
+Effect_AuraAllGainA1D1:
+            lda #E_INT_GAIN_A1D1
+Effect_AuraAll:
+            sta EfParam
+; queue gain A1D1 effect on own
+            lda EfSource                ; table-card or Player
+            and #$80                    ; only keep side bit
             ora #PlayerData+PD_TABLE
             tax                         ; first table-card
--           ldy TD_CARD,x
-            cpy #$FF                    ; empty
+-           lda TD_CARD,x
+            cmp #$FF                    ; empty
             beq ++
-            lda #E_INT_GAIN_A1D1
+            lda EfParam
             jsr QueueEffect
 ++          txa
             clc
@@ -1680,7 +1682,7 @@ Effect_AuraAllGain11:
 +           cmp #E_INT_GAIN_A1D1
             bne +
 ; inc ATK and inc DEF of Source
-Effect_Gain11:
+Effect_GainA1D1:
             ldx EfSource
             inc TD_ATK,x
             inc TD_DEF,x
@@ -1766,6 +1768,7 @@ Effect_DeadCard:
             bne +
 ; queue hit 4 effect on random enemy
             ldy #4                      ; Y=damage
+Effect_HitRandomEnemyForY:
             lda EfSource                ; Player
             eor #$80
             jsr PickRandomTargetInX     ; X=table-card
@@ -1776,26 +1779,22 @@ Effect_DeadCard:
             bne +
 ; queue hit 3 effect on random enemy
             ldy #3                      ; Y=damage
-            lda EfSource                ; Player
-            eor #$80
-            jsr PickRandomTargetInX     ; X=table-card
-            lda #E_INT_HIT
-            jmp QueueEffect
+            jmp Effect_HitRandomEnemyForY
 
 +           cmp #E_HIT_2x2
             bne +
 ; queue hit 2 effect on 2 random enemies
             ldy #2                      ; Y=damage
-            lda EfSource                ; Player
-            eor #$80
-            jsr PickRandomTargetInX     ; X=table-card
-            lda #E_INT_HIT
-            jsr QueueEffect
-            lda EfSource                ; Player
-            eor #$80
-            jsr PickRandomTargetInX     ; X=table-card
-            lda #E_INT_HIT
-            jmp QueueEffect
+            jsr Effect_HitRandomEnemyForY
+            jmp Effect_HitRandomEnemyForY
+
++           cmp #E_HIT_3x3
+            bne +
+; queue hit 3 effect on 3 random enemies
+            ldy #3                      ; Y=damage
+            jsr Effect_HitRandomEnemyForY
+            jsr Effect_HitRandomEnemyForY
+            jmp Effect_HitRandomEnemyForY
 
 +           cmp #E_INT_HIT
     	    bne +
@@ -1803,8 +1802,9 @@ Effect_DeadCard:
             ldx EfSource                ; table-card
             lda TD_CARD,x
             cmp #$FF
-            beq .stealrts5              ; fizzle
-            lda TD_STATUS,x
+            bne ++
+            rts                         ; fizzle
+++          lda TD_STATUS,x
             and #STATUS_SHIELD
             beq ++
             ; unshield
@@ -1845,26 +1845,11 @@ Effect_Wrap:
             lda #FX_WRAP
             jmp PlayFX
 
-+           cmp #E_GAIN_D2
++           cmp #E_ALL_GAIN_D2
             bne +
-; queue gain D2 effect on own
-            lda EfSource                ; Player
-            ora #PD_TABLE
-            tax
--           lda TD_CARD,x
-            cmp #$FF
-            beq ++
+Effect_AuraAllGainD2:
             lda #E_INT_GAIN_D2
-            jsr QueueEffect
-            txa
-            clc
-            adc #SIZEOF_TD
-            tax
-            and #$7F                    ; make it work with both Players
-            cmp #PlayerData+PD_TABLE+MAX_TABLE*SIZEOF_TD
-            bne -
-.stealrts5:
-++          rts
+            jmp Effect_AuraAll
 
 +           cmp #E_INT_GAIN_D2
             bne +
@@ -1879,7 +1864,7 @@ Effect_GainD2:
             jmp PlayFX
 
 +           cmp #E_HIT_ALL_2
-            bne .stealrts1
+            bne +
 ; queue hit 2 effect on all
             ldy #2                      ; Y=damage
             lda EfSource                ; Player
@@ -1896,14 +1881,32 @@ Effect_GainD2:
             beq ++
             lda #E_INT_HIT
             jsr QueueEffect
-            txa
+++          txa
             clc
             adc #SIZEOF_TD
             tax
             and #$7F                    ; make it work with both Players
             cmp #PlayerData+PD_TABLE+MAX_TABLE*SIZEOF_TD
             bne -
-++          rts
+            rts
+
++           cmp #E_ALL_GAIN_A2
+            bne +
+Effect_AuraAllGainA2:
+            lda #E_INT_GAIN_A2
+            jmp Effect_AuraAll
+
++           cmp #E_INT_GAIN_A2
+            bne .stealrts1
+; adds A2 to Source
+Effect_GainA2:
+            ldx EfSource                ; table-card
+            lda TD_ATK,x
+            clc
+            adc #2
+            sta TD_ATK,x
+            lda #FX_GAIN_A2
+            jmp PlayFX
 
 
 ;----------------------------------------------------------------------------
@@ -2475,7 +2478,7 @@ Cards:
     !byte $52, $13, N_LEGO,          E_READY,      G_14
     !byte $54, $45, N_PVC,           T_NONE,       G_13
     !byte $12, $00, N_PLASTIC_WRAP,  E_WRAP,       G_16
-    !byte $15, $00, N_PUR_FOAM,      E_GAIN_D2,    G_11
+    !byte $15, $00, N_PUR_FOAM,      E_ALL_GAIN_D2,G_11
     !byte $13, $00, N_PLASTIC_KNIFE, E_HIT_4,      G_12
     C_CANDY_LEADER=*-Cards
     !byte $E3, $44, N_CANDY_LEADER,  E_SHIELD,     G_LEGND_CANDY
@@ -2483,22 +2486,23 @@ Cards:
     !byte $65, $54, N_CANDY_SIS,     E_GUARD,      G_18
     !byte $63, $34, N_CANDY_WAFFLE,  T_NONE ,      G_23
     !byte $62, $22, N_SOUR_CANDY,    E_SHIELD,     G_19
-    !byte $24, $00, N_SPRINKLES,     E_GAIN_A2,    G_20
+    !byte $24, $00, N_SPRINKLES,     E_ALL_GAIN_A2,G_20
     !byte $22, $00, N_CANDY_WRAP,    E_WRAP_2,     G_21
     !byte $23, $00, N_MENTHOL,       E_HIT_ALL_1,  G_22
     C_SOAP_LEADER=*-Cards
-    !byte $F0, $00, N_SOAP_LEADER,   T_NONE,       G_LEGND_SOAP
-    !byte $71, $12, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $72, $12, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $73, $12, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $74, $12, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $75, $12, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $76, $12, N_WANNABE,       T_NONE,       G_WANNABE
-    !byte $77, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    !byte $F3, $13, N_SOAP_LEADER,   E_ALL_GAIN_D2,G_LEGND_SOAP
+    !byte $71, $11, N_WANNABE,       E_SHIELD,     G_WANNABE
+    !byte $72, $12, N_SOAP_ROPE,     E_RESTORE_L1, G_BOMB
+    !byte $73, $43, N_DUCK,          T_NONE,       G_28
+    !byte $74, $25, N_REDEEMER,      E_GUARD,      G_26
+    !byte $32, $00, N_BAND_AID,      E_RESTORE_ALL_L1, G_29
+    !byte $35, $00, N_SLS,           E_HIT_3x3,    G_30
+    !byte $34, $00, N_HERBAL_SOAP,   E_RESTORE_L4, G_11
 NUM_CARDS=(*-Cards)/5
 
 ; default decks (8 bytes each, starting with legendary)
 Decks:
+    ; !byte C_SOAP_LEADER,C_SOAP_LEADER+5,C_SOAP_LEADER+10,C_SOAP_LEADER+15,C_SOAP_LEADER+20,C_SOAP_LEADER+25,C_SOAP_LEADER+30,C_SOAP_LEADER+35
     ; !byte C_CANDY_LEADER,C_CANDY_LEADER+5,C_CANDY_LEADER+10,C_CANDY_LEADER+15,C_CANDY_LEADER+20,C_CANDY_LEADER+25,C_CANDY_LEADER+30,C_CANDY_LEADER+35
     !byte C_GOBLIN_LEADER,C_GOBLIN_LEADER+5,C_GOBLIN_LEADER+10,C_GOBLIN_LEADER+15,C_GOBLIN_LEADER+20,C_GOBLIN_LEADER+25,C_GOBLIN_LEADER+30,C_GOBLIN_LEADER+35
     !byte C_POLY_LEADER,C_POLY_LEADER+5,C_POLY_LEADER+10,C_POLY_LEADER+15,C_POLY_LEADER+20,C_POLY_LEADER+25,C_POLY_LEADER+30,C_POLY_LEADER+35
@@ -2615,9 +2619,9 @@ GlyphData:
     !byte 160,160,160
     !byte 124,226,126
     G_26=*-GlyphData
-    !byte 230,123,102
-    !byte 230,102,230
-    !byte 102,230,102
+    !byte 100,81,100
+    !byte 119,160,119
+    !byte 32,160,32
     G_27=*-GlyphData
     !byte 32,85,73
     !byte 233,160,93
@@ -2626,14 +2630,14 @@ GlyphData:
     !byte 233,215,233
     !byte 233,160,160
     !byte 120,120,120
-    ; G_29=*-GlyphData
-    ; !byte 32,32,32
-    ; !byte 32,32,32
-    ; !byte 32,32,32
-    ; G_30=*-GlyphData
-    ; !byte 32,32,32
-    ; !byte 32,32,32
-    ; !byte 32,32,32
+    G_29=*-GlyphData
+    !byte 32,78,77
+    !byte 78,160,78
+    !byte 77,78,32
+    G_30=*-GlyphData
+    !byte 147,64,147
+    !byte 66,140,66
+    !byte 147,64,147
     ; G_31=*-GlyphData
     ; !byte 32,32,32
     ; !byte 32,32,32
@@ -2662,7 +2666,7 @@ TextData:
     !byte M_FOREVER,M_SOAP,0
     N_WANNABE=*-TextData
     !byte M_SUIT,M_WANNABE,0
-    E_ALL_GAIN_A1D1=*-TextData ; All other cards of the same suit gain A1/D1
+    E_ALL_GAIN_A1D1=*-TextData ; All your cards gain A1/D1
     E_INT_GAIN_A1D1=*-TextData+1
     !byte M_ALL,M_YOUR,M_GAIN,M_A1D1,0
     E_READY=*-TextData ; Card has no summoning sickness
@@ -2675,6 +2679,8 @@ TextData:
     !byte M_HIT,M_FOR,M_A3,0
     E_HIT_2x2=*-TextData ; Hit 2x (enemy) for 2
     !byte M_HIT,M_2X,M_FOR,M_A2,0
+    E_HIT_3x3=*-TextData ; Hit 3x (enemy) for 3
+    !byte M_HIT,M_3X,M_FOR,M_A3,0
     E_HIT_ALL_2=*-TextData ; Hit all for 2
     !byte M_HIT,M_ALL,M_FOR,M_A2,0
     E_HIT_4=*-TextData ; Hit (enemy) for 4
@@ -2682,10 +2688,10 @@ TextData:
     E_WRAP=*-TextData ; Add D3 and guard
     E_INT_WRAP=*-TextData+1
     !byte M_GIVE,M_D3,M_AND,M_GUARD,0
-    E_GAIN_D2=*-TextData ; Add D2 to own
+    E_ALL_GAIN_D2=*-TextData ; Add D2 to own
     E_INT_GAIN_D2=*-TextData+1
     !byte M_ALL,M_YOUR,M_GAIN,M_D2,0
-    E_GAIN_A2=*-TextData ; Add A2 to own
+    E_ALL_GAIN_A2=*-TextData ; Add A2 to own
     E_INT_GAIN_A2=*-TextData+1
     !byte M_ALL,M_YOUR,M_GAIN,M_A2,0
     E_WRAP_2=*-TextData ; Add 3x Shield
@@ -2693,6 +2699,12 @@ TextData:
     !byte M_GIVE,M_3X,M_SHIELD,0
     E_HIT_ALL_1=*-TextData ; Hit all for 1
     !byte M_HIT,M_ALL,M_FOR,M_A1,0
+    E_RESTORE_L1=*-TextData
+    !byte M_RESTORE,M_L1,0
+    E_RESTORE_L4=*-TextData
+    !byte M_RESTORE,M_L4,0
+    E_RESTORE_ALL_L1=*-TextData
+    !byte M_RESTORE,M_L1,M_FOR,M_ALL,0
     T_YOUR_OPPONENT_IS=*-TextData
     !byte M_YOUR,M_OPPONENT,M_IS
     T_OPPONENT_NAME=*-TextData
@@ -2739,6 +2751,18 @@ TextData:
     !byte M_CANDY,M_WRAP,0
     N_MENTHOL=*-TextData
     !byte M_MENTHOL,0
+    N_SOAP_ROPE=*-TextData
+    !byte M_SOAP,M_ON_A,M_ROPE,0
+    N_DUCK=*-TextData
+    !byte M_RUBBER,M_DUCK,0
+    N_REDEEMER=*-TextData
+    !byte M_SOAP,M_REDEEMER,0
+    N_BAND_AID=*-TextData
+    !byte M_BAND,M_AID,0
+    N_SLS=*-TextData
+    !byte M_SLS,0
+    N_HERBAL_SOAP=*-TextData
+    !byte M_HERBAL,M_SOAP,0
 !if *-TextData >= $FF { !error "Out of TextData memory" }
 ; Additional effects - make sure they don't map to any string used as CARD_EFFECT (i.e. 2 or 15)
 E_INT_ATTACKPLAYER=3
@@ -2815,6 +2839,10 @@ opponent_name2:                    !scr "p",'.'+$80 ; SELF-MODIFIED
 !align 1,0,0
     M_D3          =(*-MacroData)>>1 : !scr CHR_DEF,'3'+$80
 !align 1,0,0
+    M_L1          =(*-MacroData)>>1 : !scr CHR_LIFE,'1'+$80
+!align 1,0,0
+    M_L4          =(*-MacroData)>>1 : !scr CHR_LIFE,'4'+$80
+!align 1,0,0
     M_READY       =(*-MacroData)>>1 : !scr "read",'y'+$80
 !align 1,0,0
     M_GUARD       =(*-MacroData)>>1 : !scr "guar",'d'+$80
@@ -2824,6 +2852,8 @@ opponent_name2:                    !scr "p",'.'+$80 ; SELF-MODIFIED
     M_GIVE        =(*-MacroData)>>1 : !scr "giv",'e'+$80
 !align 1,0,0
     M_HIT         =(*-MacroData)>>1 : !scr "hi",'t'+$80
+!align 1,0,0
+    M_RESTORE     =(*-MacroData)>>1 : !scr "restor",'e'+$80
 !align 1,0,0
     M_2X          =(*-MacroData)>>1 : !scr "2",'x'+$80
 !align 1,0,0
@@ -2866,6 +2896,24 @@ opponent_name2:                    !scr "p",'.'+$80 ; SELF-MODIFIED
     M_SPRINKLES   =(*-MacroData)>>1 : !scr "sprinkle",'s'+$80
 !align 1,0,0
     M_MENTHOL     =(*-MacroData)>>1 : !scr "mentho",'l'+$80
+!align 1,0,0
+    M_ON_A        =(*-MacroData)>>1 : !scr "on ",'a'+$80
+!align 1,0,0
+    M_ROPE        =(*-MacroData)>>1 : !scr "rop",'e'+$80
+!align 1,0,0
+    M_RUBBER      =(*-MacroData)>>1 : !scr "rubbe",'r'+$80
+!align 1,0,0
+    M_DUCK        =(*-MacroData)>>1 : !scr "duc",'k'+$80
+!align 1,0,0
+    M_REDEEMER    =(*-MacroData)>>1 : !scr "redeeme",'r'+$80
+!align 1,0,0
+    M_BAND        =(*-MacroData)>>1 : !scr "ban",'d'+$80
+!align 1,0,0
+    M_AID         =(*-MacroData)>>1 : !scr "ai",'d'+$80
+!align 1,0,0
+    M_SLS         =(*-MacroData)>>1 : !scr "sl",'s'+$80
+!align 1,0,0
+    M_HERBAL      =(*-MacroData)>>1 : !scr "herba",'l'+$80
 !if *-MacroData >= $1FF { !error "Out of MacroData memory" }
     !word (*-MacroData) ; DEBUG
 
@@ -2978,6 +3026,7 @@ FxData:
     !byte 20,$F0+WHITE
     !byte 0
     FX_GAIN_A1D1=*-FxData
+    FX_GAIN_A2=*-FxData
     FX_GAIN_D2=*-FxData
     FX_WRAP=*-FxData
     FX_SHIELD=*-FxData
