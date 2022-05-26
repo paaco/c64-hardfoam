@@ -1,7 +1,8 @@
 ; HARD FOAM - a 4K compressed card game
 ; Developed for the https://ausretrogamer.com/2022-reset64-4kb-craptastic-game-competition
 
-; TODO: implement remaining Candy and Soap spells
+; TODO: implement E_WRAP_2 and E_RESTORE_ spells
+; TODO: randomize SID at init
 ; TODO: 14+1 free deck selector
 ; TODO: don't draw ATK/DEF on Spell cards
 ; TODO: on play select place on table
@@ -282,9 +283,6 @@ DrawTextX:
             bne --
 ++          rts
 
-SuitTextData:
-    !byte M_GOBLIN,M_POLYSTYRENE,M_CANDY,M_SOAP
-
 ; clears the two lower lines (clobbers A,X)
 ClearLowerLines: ; 14 bytes
             lda #CHR_SPACE
@@ -528,11 +526,17 @@ INIT:
             sta $D404
             lda #20                     ; cutoff high
             sta $D416
-            lda #%00111111              ; RRRRE321 reso + filter voices
+            lda #%10111111              ; RRRRE321 reso + filter voices
             sta $D417
-            lda #%00111111              ; 3HBLVVVV band + volume
+            lda #%10111111              ; 3HBLVVVV band + volume
             sta $D418
 }
+; TODO RANDOM INIT
+; LDA #$FF  ; maximum frequency value
+; STA $D40E ; voice 3 frequency low byte
+; STA $D40F ; voice 3 frequency high byte
+; LDA #$80  ; noise waveform, gate bit off
+; STA $D412 ; voice 3 control register
 
 !if INTRO=1 {
             jmp Logo
@@ -1865,8 +1869,10 @@ Effect_GainD2:
 
 +           cmp #E_HIT_ALL_2
             bne +
+Effect_HitAll2:
 ; queue hit 2 effect on all
             ldy #2                      ; Y=damage
+Effect_HitAllForY:
             lda EfSource                ; Player
             ora #PD_TABLE
             tax
@@ -1889,6 +1895,12 @@ Effect_GainD2:
             cmp #PlayerData+PD_TABLE+MAX_TABLE*SIZEOF_TD
             bne -
             rts
+
++           cmp #E_HIT_ALL_1
+            bne +
+Effect_HitAll1:
+            ldy #1
+            jmp Effect_HitAllForY
 
 +           cmp #E_ALL_GAIN_A2
             bne +
@@ -2771,6 +2783,9 @@ E_INT_ATTACK2=5
 E_INT_DROPCARD=6
 E_INT_DEADCARD=7
 E_INT_HIT=8
+
+SuitTextData:
+    !byte M_GOBLIN,M_POLYSTYRENE,M_CANDY,M_SOAP
 
 ; Text macros, each ends with a byte >= $80
 !align 1,0,0
