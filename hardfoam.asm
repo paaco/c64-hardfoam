@@ -1,7 +1,7 @@
 ; HARD FOAM - a 4K compressed card game
 ; Developed for the https://ausretrogamer.com/2022-reset64-4kb-craptastic-game-competition
 
-; TODO: implement E_WRAP_2 and E_RESTORE_ spells
+; TODO: implement E_RESTORE_ spells
 ; TODO: randomize SID at init
 ; TODO: 14+1 free deck selector
 ; TODO: don't draw ATK/DEF on Spell cards
@@ -1909,7 +1909,7 @@ Effect_AuraAllGainA2:
             jmp Effect_AuraAll
 
 +           cmp #E_INT_GAIN_A2
-            bne .stealrts1
+            bne +
 ; adds A2 to Source
 Effect_GainA2:
             ldx EfSource                ; table-card
@@ -1919,6 +1919,17 @@ Effect_GainA2:
             sta TD_ATK,x
             lda #FX_GAIN_A2
             jmp PlayFX
+
++           cmp #E_WRAP_2
+            bne .stealrts1
+; queue 3x shield effect on random selfy
+Effect_Wrap2:
+            jsr ++
+            jsr ++
+++          lda EfSource                ; Player
+            jsr PickRandomTargetInX     ; X=table-card
+            lda #E_SHIELD
+            jmp QueueEffect
 
 
 ;----------------------------------------------------------------------------
@@ -2707,7 +2718,6 @@ TextData:
     E_INT_GAIN_A2=*-TextData+1
     !byte M_ALL,M_YOUR,M_GAIN,M_A2,0
     E_WRAP_2=*-TextData ; Add 3x Shield
-    E_INT_WRAP_2=*-TextData+1
     !byte M_GIVE,M_3X,M_SHIELD,0
     E_HIT_ALL_1=*-TextData ; Hit all for 1
     !byte M_HIT,M_ALL,M_FOR,M_A1,0
