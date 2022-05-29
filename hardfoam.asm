@@ -1,7 +1,7 @@
 ; HARD FOAM - a 4K compressed card game
 ; Developed for the https://ausretrogamer.com/2022-reset64-4kb-craptastic-game-competition
 
-; TODO: implement E_RESTORE_ spells
+; TODO: Flash of Light: 2C Restore 4 Health, draw a card
 ; TODO: randomize SID at init
 ; TODO: 14+1 free deck selector
 ; TODO: don't draw ATK/DEF on Spell cards
@@ -58,6 +58,7 @@ CHR_LIFE=83 ; heart
 HAND_CARDWIDTH=4
 TABLE_CARDWIDTH=5
 MAX_EFFECT_QUEUE=20
+MAX_LIFE=10
 AI_ATTACKS=50
 
 !addr SCREEN=$0400
@@ -336,7 +337,7 @@ DrawCounters:
             sta SCREEN+23*40+1
 
             ; draw both health bars
-            lda #10
+            lda #MAX_LIFE
             sec
             sbc AIData+PD_LIFE
             tax
@@ -354,7 +355,7 @@ DrawCounters:
 .healthbar:
             stx Tmp1
             jsr SetCursor
-            ldx #10
+            ldx #MAX_LIFE
 -           cpx Tmp1
             bne +
             ; switch color
@@ -864,6 +865,17 @@ NextPlayerRound:
 
             ; restore energy for player
             ldx #PlayerData
+            lda #8
+            sta PD_LIFE,x
+            jsr Energize
+            jsr Energize
+            jsr Energize
+            jsr Energize
+            jsr Energize
+            jsr Energize
+            jsr Energize
+            jsr Energize
+            jsr Energize
             jsr Energize
             jsr DrawCounters
 
@@ -1662,9 +1674,9 @@ Effect_Shield:
             bne +
 Effect_AuraAllGainA1D1:
             lda #E_INT_GAIN_A1D1
+; queue effect A on all own
 Effect_AuraAll:
             sta EfParam
-; queue gain A1D1 effect on own
             lda EfSource                ; table-card or Player
             and #$80                    ; only keep side bit
             ora #PlayerData+PD_TABLE
@@ -1921,7 +1933,7 @@ Effect_GainA2:
             jmp PlayFX
 
 +           cmp #E_WRAP_2
-            bne .stealrts1
+            bne +
 ; queue 3x shield effect on random selfy
 Effect_Wrap2:
             jsr ++
@@ -1930,6 +1942,64 @@ Effect_Wrap2:
             jsr PickRandomTargetInX     ; X=table-card
             lda #E_SHIELD
             jmp QueueEffect
+
++           cmp #E_RESTORE_L4
+            bne +
+; restore 4 life
+Effect_RestoreL4:
+            lda #4
+Effect_RestoreA:
+            sta EfParam
+            lda EfSource                ; table-card or Player
+            and #$80                    ; only keep side bit
+            ora #PlayerData
+            tax
+            lda PD_LIFE,x
+            cmp #MAX_LIFE
+            bne ++
+            rts                         ; full health, nothing to do
+++          clc
+            adc EfParam
+            cmp #MAX_LIFE
+            bcc ++
+            lda #MAX_LIFE
+++          sta PD_LIFE,x
+            jsr DrawCounters
+            lda EfSource                ; table-card or Player
+            and #$80                    ; only keep side bit
+            ora #PlayerData+PD_TABLE
+            tax                         ; first table-card
+            lda #FX_RESTORE_PLAYER
+            jmp PlayFX
+
++           cmp #E_RESTORE_L1
+            bne +
+; restore 4 life
+Effect_RestoreL1:
+            lda #1
+            jmp Effect_RestoreA
+
++           cmp #E_RESTORE_ALL_L1
+            bne +
+            ldx EfSource                ; Player
+            lda #E_RESTORE_L1
+            jsr QueueEffect
+            lda #E_INT_RESTORE_L1
+            jmp Effect_AuraAll
+
++           cmp #E_INT_RESTORE_L1
+            bne .stealrts1
+; restore max 1 Def
+            ldx EfSource                ; table-card
+            ldy TD_CARD,x
+            lda Cards+CARD_ATDF,y       ; AAAADDDD : AAAA=Attack DDDD=Defense
+            and #$0F                    ; A=original Def
+            cmp TD_DEF,x                ; compare with current value
+            beq .stealrts1              ; equal, don't do anything
+            bcc .stealrts1              ; larger then don't do anything
+            inc TD_DEF,x
+            lda #FX_GAIN_D2
+            jmp PlayFX
 
 
 ;----------------------------------------------------------------------------
@@ -2525,8 +2595,6 @@ NUM_CARDS=(*-Cards)/5
 
 ; default decks (8 bytes each, starting with legendary)
 Decks:
-    ; !byte C_SOAP_LEADER,C_SOAP_LEADER+5,C_SOAP_LEADER+10,C_SOAP_LEADER+15,C_SOAP_LEADER+20,C_SOAP_LEADER+25,C_SOAP_LEADER+30,C_SOAP_LEADER+35
-    ; !byte C_CANDY_LEADER,C_CANDY_LEADER+5,C_CANDY_LEADER+10,C_CANDY_LEADER+15,C_CANDY_LEADER+20,C_CANDY_LEADER+25,C_CANDY_LEADER+30,C_CANDY_LEADER+35
     !byte C_GOBLIN_LEADER,C_GOBLIN_LEADER+5,C_GOBLIN_LEADER+10,C_GOBLIN_LEADER+15,C_GOBLIN_LEADER+20,C_GOBLIN_LEADER+25,C_GOBLIN_LEADER+30,C_GOBLIN_LEADER+35
     !byte C_POLY_LEADER,C_POLY_LEADER+5,C_POLY_LEADER+10,C_POLY_LEADER+15,C_POLY_LEADER+20,C_POLY_LEADER+25,C_POLY_LEADER+30,C_POLY_LEADER+35
     !byte C_CANDY_LEADER,C_CANDY_LEADER+5,C_CANDY_LEADER+10,C_CANDY_LEADER+15,C_CANDY_LEADER+20,C_CANDY_LEADER+25,C_CANDY_LEADER+30,C_CANDY_LEADER+35
@@ -2726,7 +2794,8 @@ TextData:
     E_RESTORE_L4=*-TextData
     !byte M_RESTORE,M_L4,0
     E_RESTORE_ALL_L1=*-TextData
-    !byte M_RESTORE,M_L1,M_FOR,M_ALL,0
+    E_INT_RESTORE_L1=*-TextData+1
+    !byte M_RESTORE,M_ALL,M_L1,0
     T_YOUR_OPPONENT_IS=*-TextData
     !byte M_YOUR,M_OPPONENT,M_IS
     T_OPPONENT_NAME=*-TextData
@@ -3095,6 +3164,12 @@ FxData:
     !byte SFX_BOOM
     }
     !byte 20,$80
+    !byte 0
+    FX_RESTORE_PLAYER=*-FxData
+!if AUDIO=1 {
+    !byte SFX_NOTES
+    }
+    !byte 70,$80
     !byte 0
 
 !if AUDIO=1 {
