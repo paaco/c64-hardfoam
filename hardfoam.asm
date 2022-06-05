@@ -1,9 +1,11 @@
 ; HARD FOAM - a 4K compressed card game
 ; Developed for the https://ausretrogamer.com/2022-reset64-4kb-craptastic-game-competition
 
+; WIP: 14+1 free deck selector
+; TODO: randomize SID at init?
+; TODO: balance fix: 0/9->1/9
 ; TODO: Flash of Light: 2C Restore 4 Health, draw a card
-; TODO: randomize SID at init
-; TODO: 14+1 free deck selector
+; TODO: card draw effect and fatigue
 ; TODO: don't draw ATK/DEF on Spell cards
 ; TODO: on play select place on table
 ; TODO: on play select target on table (own or opponent)
@@ -499,6 +501,7 @@ INIT:
             sty $dd0d   ; Turn off CIAs Timer interrupts
             lda $dc0d   ; cancel all CIA-IRQs in queue/unprocessed
             lda $dd0d   ; cancel all CIA-IRQs in queue/unprocessed
+            sty ZP_RNG_HIGH
 
             ; copy Draw function to ZP
             ldx #SIZEOF_DRAW-1
@@ -532,18 +535,23 @@ INIT:
             lda #%10111111              ; 3HBLVVVV band + volume
             sta $D418
 }
-; TODO RANDOM INIT
-; LDA #$FF  ; maximum frequency value
-; STA $D40E ; voice 3 frequency low byte
-; STA $D40F ; voice 3 frequency high byte
-; LDA #$80  ; noise waveform, gate bit off
-; STA $D412 ; voice 3 control register
 
 !if INTRO=1 {
             jmp Logo
-} else {
-            jmp LogoDone
 }
+
+LogoDone:
+            ; set color of counters
+            ldx #3-1
+-           lda #COL_HEALTH_ON
+            sta $D800,x
+            sta $D800+24*40,x
+            lda #COL_PLAIN
+            sta $D800+40,x
+            sta $D800+23*40,x
+            dex
+            bpl -
+            jmp Start
 
 ; Draws rectangle 5x5 (upto 8x6) via DrawF function, offset in Y (clobbers A,Y)
 INITDRAW:
@@ -577,12 +585,6 @@ SIZEOF_DRAW=*-INITDRAW
 ; reset all player data (energy, deck, table)
 InitPlayersData:
             ldx #SIZEOF_PD-1
--           lda #$FF
-            sta PlayerData,x
-            sta AIData,x
-            dex
-            cpx #SIZEOF_INITDATA-1
-            bne -
 -           lda InitData,x
             sta PlayerData,x
             sta AIData,x
@@ -593,36 +595,41 @@ InitPlayersData:
 ; initial PlayerData structure (rest is filled with $FF)
 InitData:
     !scr 10, "0/0", 28
-SIZEOF_INITDATA = *-InitData
+    !fill SIZEOF_PD-(*-InitData),$FF
+!if (*-InitData <> SIZEOF_PD) { !error "InitData table wrong size" }
 
-; copy deck# in A into PlayerData deck, unpacks and shuffles (clobbers A,X,Y)
+
+; copy deck# (size 15) in A into PlayerData deck, unpacks and shuffles (clobbers A,X,Y)
 CreatePlayerDeck:
             asl
             asl
-            asl                         ; 0,8,16,24
+            asl
+            asl                         ; 0,16,32,48
             tax
             ldy #0
 -           lda Decks,x
             sta PlayerData+PD_DECK,y
             inx
             iny
-            cpy #8
+            cpy #15
             bne -
             ; fall through
 
-; expands and shuffles PlayerData deck from 8 bytes to 28 cards (clobbers A,X,Y)
+; expands and shuffles PlayerData deck from 15 bytes to 28 cards (clobbers A,X,Y)
 UnpackAndShufflePlayerDeck:
             lda PlayerData+PD_DECK      ; leader
             pha                         ; backup
-            ldx #7
+            ldx #14
             ldy #28-1
 -           lda PlayerData+PD_DECK,x
             sta PlayerData+PD_DECK,y
             dey
-            tya
-            and #%00000011              ; use lower 2 bits
-            cmp #(28-1)&%00000011       ; to loop 4 times
-            bne -
+            sta PlayerData+PD_DECK,y
+            dey
+            ; tya
+            ; and #%00000011              ; use lower 2 bits
+            ; cmp #(28-1)&%00000011       ; to loop 4 times
+            ; bne -
             dex
             bne -
             ; put leader in random place
@@ -747,27 +754,15 @@ Start:
             lda #33                     ; TODO seed via D418
             sta ZP_RNG_LOW              ; seed prng with some value
 
-            ; setup random AI name
+            ; pick random AI deck
             jsr Random
-            and #$03                    ; 0..3 (name#)
-            asl
+            and #$03                    ; 0..3 (deck# == name#)
             tax
             lda AINames,x
             sta opponent_name1
-            lda AINames+1,x
+            lda AINames+4,x
             sta opponent_name2
-
-            ; draw "your opponent is"
-            lda #COL_PLAIN
-            sta SuitCol
-            ldy #<(SCREEN+5*40+9)
-            lda #>(SCREEN+5*40+9)
-            ldx #T_YOUR_OPPONENT_IS ; 21
-            jsr SetCursorDrawTextX
-
-            ; pick random AI deck
-            jsr Random
-            and #$03                    ; 0..3 (deck#)
+            txa                         ; restore
             jsr CreatePlayerDeck
             ; copy to AI deck
             ldx #28-1
@@ -776,21 +771,76 @@ Start:
             dex
             bpl -
 
-            ; pick your deck
-            ldy #<(SCREEN+9*40+(40-17)/2)
-            lda #>(SCREEN+9*40+(40-17)/2)
-            ldx #T_PICK_DECK ; 17
+            ; draw "pick deck vs opponent"
+            lda #COL_PLAIN
+            sta SuitCol
+            ldy #<(SCREEN+3)
+            lda #>(SCREEN+3)
+            ldx #T_YOUR_OPPONENT_IS
             jsr SetCursorDrawTextX
-            ; invert at cursor
-            ldy #17
--           dey
-            lda (_CursorPos),y
-            eor #$80
-            sta (_CursorPos),y
-            cpy #$00
+
+            ; draw card
+            ldy #<(SCREEN+2*40+(40-24)/2-5)
+            lda #>(SCREEN+2*40+(40-24)/2-5)
+            jsr SetCursor
+            ldx #C_GM1
+            jsr DrawCard
+
+            jsr SetCursor
+            ; move up/down selects different card (rotates all 32 cards)
+            ; fire adds/removes card from deck -> replace existing legend
+            ; move right(GO) + fire starts
+
+            ; redraw selected deck
+            lda #CHR_SPACE
+            ldx #5*40
+-           sta SCREEN-1+10*40,x
+            sta SCREEN-1+15*40,x
+            sta SCREEN-1+20*40,x
+            dex
             bne -
 
-            ; draw first card of each deck (8 bytes apart)
+            ldy #<(SCREEN+10*40+3)
+            lda #>(SCREEN+10*40+3)
+            jsr SetCursor
+            ldx #0
+-           stx Tmp2                    ; offset
+            lda Decks,x
+            beq +                       ; skip empty
+            tax
+            jsr DecorateFrame           ; colors and frame
+            ldy #0
+            lda frame_TYPE
+            sta (_CursorPos),y
+            lda SuitCol
+            sta (_ColorPos),y
+            iny
+            lda frame_COST
+            sta (_CursorPos),y
+            lda SuitCol
+            sta (_ColorPos),y
+            iny
+            lda Cards+CARD_NAME,x
+            jsr DrawText
++           lda #40
+            jsr AddToCursor
+            ldx Tmp2
+            inx
+            cpx #15
+            bne -
+
+            ; empty screen
+            lda #CHR_SPACE
+            ldx #5*40
+-           sta SCREEN-1+10*40,x
+            sta SCREEN-1+15*40,x
+            sta SCREEN-1+20*40,x
+            dex
+            bne -
+
+            ;jmp *
+
+            ; draw first card of each deck (16 bytes apart)
             ldy #<(SCREEN+15*40+(40-24)/2)
             lda #>(SCREEN+15*40+(40-24)/2)
             jsr SetCursor
@@ -802,9 +852,9 @@ Start:
             jsr AddToCursor
             lda Tmp1
             clc
-            adc #8
+            adc #16
             tay
-            cpy #4*8
+            cpy #4*16
             bne -
 
             ; select deck
@@ -821,12 +871,12 @@ Start:
             ldy #<(SCREEN+15*40+(40-24)/2)
             lda #>(SCREEN+15*40+(40-24)/2)
             jsr SetCursor
-!if DEBUG=0 {
+;!if DEBUG=0 {
             jsr SelectCard
             lda Joystick
             cmp #%11101111              ; FIRE
             bne -
-}
+;}
             ; create selected deck as player deck
             lda Index                   ; 0..3
             jsr CreatePlayerDeck
@@ -865,17 +915,6 @@ NextPlayerRound:
 
             ; restore energy for player
             ldx #PlayerData
-            lda #8
-            sta PD_LIFE,x
-            jsr Energize
-            jsr Energize
-            jsr Energize
-            jsr Energize
-            jsr Energize
-            jsr Energize
-            jsr Energize
-            jsr Energize
-            jsr Energize
             jsr Energize
             jsr DrawCounters
 
@@ -1023,14 +1062,10 @@ RunPlayerAction:
             ; check player deaths after playing a card
             lda PlayerData+PD_LIFE
             bne .d1
-            lda #ORANGE
-            ldy #S_LOSE
-            jmp GameOver
+            jmp GameOverLost
 .d1:        lda AIData+PD_LIFE
             bne ++
-            lda #GREEN
-            ldy #S_WIN
-            jmp GameOver
+            jmp GameOverYouWin
 
 ++          jmp .redraw
 
@@ -1187,7 +1222,16 @@ NextAIRound:
 .ai_canuse: ; verify that table has room for monster card to cast
             lda Cards+CARD_LTSC,y
             and #%01000000              ; LTSSCCCC T=Type(0=Spell/1=Monster)
-            beq .ai_canuse2             ; spells can always be cast
+            bne .ai_monster
+            ; only cast spells when there are cards on both tables
+            lda PlayerData+PD_TABLE+TD_CARD
+            cmp #$FF
+            beq +                       ; no Player cards on table
+            lda AIData+PD_TABLE+TD_CARD
+            cmp #$FF
+            beq +                       ; no AI cards on table
+            bne .ai_canuse2
+.ai_monster:
             lda AIData+PD_TABLE+SIZEOF_TD*(MAX_TABLE-1)+TD_CARD ; last table-card
             cmp #$FF                    ; still open?
             bne +                       ; table full
@@ -1218,19 +1262,18 @@ RunAIAction:
             ; check player deaths after playing a card
             lda PlayerData+PD_LIFE
             bne .d2
-            ldy #S_LOSE
-            jmp GameOver
+            jmp GameOverLost
 .d2:        lda AIData+PD_LIFE
             bne .ai_castmore
-            ldy #S_WIN
-            jmp GameOver
+            jmp GameOverYouWin
 +           inx
             cpx #MAX_HAND
             bne -
 ++          lda Tmp1
             cmp Tmp2                    ; are any cards being considered?
-            bne --                      ; yes, so just retry
-            ; no castable cards found
+            beq +
+            jmp --                      ; yes, so just retry
++           ; no castable cards found
 
             ; AI turn: select a random table card, and if it exists and can attack, attack with it
             ldx #PlayerData+PD_TABLE
@@ -1301,9 +1344,14 @@ RunAIAction:
 ; GAME OVER
 ;-----------
 
-; Y=scroll text
-GameOver:
-            jsr PlayScroll
+GameOverLost:
+            lda #ORANGE
+            ldy #S_LOSE
+            bne +                       ; always
+GameOverYouWin:
+            lda #GREEN
+            ldy #S_WIN
++           jsr PlayScroll              ; A=color, X=scrolltext
 -           jsr ReadJoystick
             bne -
 -           jsr ReadJoystick
@@ -2555,50 +2603,78 @@ SIZEOF_CARD=5       ; 256/5 => 50 cards max (0 and $FF are used for other purpos
 
 Cards:
     !byte 0 ; card# (offsets) should not be 0
-    C_GOBLIN_LEADER=*-Cards
+    C_GM1=*-Cards
     !byte $C3, $33, N_GOBLIN_LEADER, E_ALL_GAIN_A1D1, G_LEGND_GOBLIN
+    C_GM2=*-Cards
     !byte $41, $11, N_WANNABE,       E_READY,      G_WANNABE
+    C_GM3=*-Cards
     !byte $44, $35, N_SHIELDMASTA,   E_GUARD,      G_3
+    C_GM4=*-Cards
     !byte $42, $32, N_GRUNT,         T_NONE,       G_4
+    C_GM5=*-Cards
     !byte $45, $46, N_BRUISER,       T_NONE,       G_5
+    C_GS1=*-Cards
     !byte $02, $00, N_GOBLIN_BOMB,   E_HIT_3,      G_BOMB
+    C_GS2=*-Cards
     !byte $03, $00, N_GOBLIN_ROCKET, E_HIT_2x2,    G_ROCKET
+    C_GS3=*-Cards
     !byte $05, $00, N_GOBLIN_FIRE,   E_HIT_ALL_2,  G_FIRE
-    C_POLY_LEADER=*-Cards
+    C_PM1=*-Cards
     !byte $D3, $09, N_POLY_LEADER,   E_GUARD,      G_LEGND_POLY
+    C_PM2=*-Cards
     !byte $51, $12, N_WANNABE,       T_NONE,       G_WANNABE
+    C_PM3=*-Cards
     !byte $52, $22, N_PLASTIC_CUP,   E_GUARD,      G_10
+    C_PM4=*-Cards
     !byte $52, $13, N_LEGO,          E_READY,      G_14
+    C_PM5=*-Cards
     !byte $54, $45, N_PVC,           T_NONE,       G_13
+    C_PS1=*-Cards
     !byte $12, $00, N_PLASTIC_WRAP,  E_WRAP,       G_16
+    C_PS2=*-Cards
     !byte $15, $00, N_PUR_FOAM,      E_ALL_GAIN_D2,G_11
+    C_PS3=*-Cards
     !byte $13, $00, N_PLASTIC_KNIFE, E_HIT_4,      G_12
-    C_CANDY_LEADER=*-Cards
+    C_CM1=*-Cards
     !byte $E3, $44, N_CANDY_LEADER,  E_SHIELD,     G_LEGND_CANDY
+    C_CM2=*-Cards
     !byte $62, $23, N_WANNABE,       T_NONE,       G_WANNABE
+    C_CM3=*-Cards
     !byte $65, $54, N_CANDY_SIS,     E_GUARD,      G_18
-    !byte $63, $34, N_CANDY_WAFFLE,  T_NONE ,      G_23
+    C_CM4=*-Cards
+    !byte $63, $34, N_CANDY_WAFFLE,  T_NONE,       G_23
+    C_CM5=*-Cards
     !byte $62, $22, N_SOUR_CANDY,    E_SHIELD,     G_19
+    C_CS1=*-Cards
     !byte $24, $00, N_SPRINKLES,     E_ALL_GAIN_A2,G_20
+    C_CS2=*-Cards
     !byte $22, $00, N_CANDY_WRAP,    E_WRAP_2,     G_21
+    C_CS3=*-Cards
     !byte $23, $00, N_MENTHOL,       E_HIT_ALL_1,  G_22
-    C_SOAP_LEADER=*-Cards
+    C_SM1=*-Cards
     !byte $F3, $13, N_SOAP_LEADER,   E_ALL_GAIN_D2,G_LEGND_SOAP
+    C_SM2=*-Cards
     !byte $71, $11, N_WANNABE,       E_SHIELD,     G_WANNABE
+    C_SM3=*-Cards
     !byte $72, $12, N_SOAP_ROPE,     E_RESTORE_L1, G_BOMB
+    C_SM4=*-Cards
     !byte $73, $43, N_DUCK,          T_NONE,       G_28
+    C_SM5=*-Cards
     !byte $74, $25, N_REDEEMER,      E_GUARD,      G_26
+    C_SS1=*-Cards
     !byte $32, $00, N_BAND_AID,      E_RESTORE_ALL_L1, G_29
+    C_SS2=*-Cards
     !byte $35, $00, N_SLS,           E_HIT_3x3,    G_30
+    C_SS3=*-Cards
     !byte $34, $00, N_HERBAL_SOAP,   E_RESTORE_L4, G_11
 NUM_CARDS=(*-Cards)/5
 
-; default decks (8 bytes each, starting with legendary)
+; default decks (16 bytes each, starting with legendary, last byte is not used)
 Decks:
-    !byte C_GOBLIN_LEADER,C_GOBLIN_LEADER+5,C_GOBLIN_LEADER+10,C_GOBLIN_LEADER+15,C_GOBLIN_LEADER+20,C_GOBLIN_LEADER+25,C_GOBLIN_LEADER+30,C_GOBLIN_LEADER+35
-    !byte C_POLY_LEADER,C_POLY_LEADER+5,C_POLY_LEADER+10,C_POLY_LEADER+15,C_POLY_LEADER+20,C_POLY_LEADER+25,C_POLY_LEADER+30,C_POLY_LEADER+35
-    !byte C_CANDY_LEADER,C_CANDY_LEADER+5,C_CANDY_LEADER+10,C_CANDY_LEADER+15,C_CANDY_LEADER+20,C_CANDY_LEADER+25,C_CANDY_LEADER+30,C_CANDY_LEADER+35
-    !byte C_SOAP_LEADER,C_SOAP_LEADER+5,C_SOAP_LEADER+10,C_SOAP_LEADER+15,C_SOAP_LEADER+20,C_SOAP_LEADER+25,C_SOAP_LEADER+30,C_SOAP_LEADER+35
+    !byte C_GM1,C_GM2,C_GM3,C_GM4,C_GM5,C_GS1,C_GS2,C_GS3, C_PM2,C_PM3,C_PM4,C_PM5,C_PS1,C_PS2,C_PS3, 0
+    !byte C_PM1,C_PM2,C_PM3,C_PM4,C_PM5,C_PS1,C_PS2,C_PS3, C_CM2,C_CM3,C_CM4,C_CM5,C_CS1,C_CS2,C_CS3, 0
+    !byte C_CM1,C_CM2,C_CM3,C_CM4,C_CM5,C_CS1,C_CS2,C_CS3, C_SM2,C_SM3,C_SM4,C_SM5,C_SS1,C_SS2,C_SS3, 0
+    !byte C_SM1,C_SM2,C_SM3,C_SM4,C_SM5,C_SS1,C_SS2,C_SS3, C_GM2,C_GM3,C_GM4,C_GM5,C_GS1,C_GS2,C_GS3, 0
 
 
 ;----------------------------------------------------------------------------
@@ -2797,7 +2873,7 @@ TextData:
     E_INT_RESTORE_L1=*-TextData+1
     !byte M_RESTORE,M_ALL,M_L1,0
     T_YOUR_OPPONENT_IS=*-TextData
-    !byte M_YOUR,M_OPPONENT,M_IS
+    !byte M_PICK,M_DECK,M_VS
     T_OPPONENT_NAME=*-TextData
     !byte M_OPPONENT_NAME,0
     T_PICK_DECK=*-TextData
@@ -2895,9 +2971,7 @@ MacroData:
 !align 1,0,0
     M_YOUR        =(*-MacroData)>>1 : !scr "you",'r'+$80
 !align 1,0,0
-    M_OPPONENT    =(*-MacroData)>>1 : !scr "opponen",'t'+$80
-!align 1,0,0
-    M_IS          =(*-MacroData)>>1 : !scr "i",'s'+$80
+    M_VS          =(*-MacroData)>>1 : !scr "v",'s'+$80
 !align 1,0,0
     M_OPPONENT_NAME=(*-MacroData)>>1
 opponent_name1:                    !scr "a."        ; SELF-MODIFIED
@@ -2982,7 +3056,7 @@ opponent_name2:                    !scr "p",'.'+$80 ; SELF-MODIFIED
     M_KNIFE       =(*-MacroData)>>1 : !scr "knif",'e'+$80
 !align 1,0,0
     M_SIS         =(*-MacroData)>>1 : !scr "si",'s'+$80
-!align 1,0,0
+!align 3,0,0 ; force following text to next page
     M_WAFFLE      =(*-MacroData)>>1 : !scr "waffl",'e'+$80
 !align 1,0,0
     M_SOUR        =(*-MacroData)>>1 : !scr "sou",'r'+$80
@@ -3009,10 +3083,10 @@ opponent_name2:                    !scr "p",'.'+$80 ; SELF-MODIFIED
 !align 1,0,0
     M_HERBAL      =(*-MacroData)>>1 : !scr "herba",'l'+$80
 !if *-MacroData >= $1FF { !error "Out of MacroData memory" }
-    !word (*-MacroData) ; DEBUG
 
 AINames:
-    !scr "bd","jt","mg","rh"
+    !scr "bjmr"
+    !scr "dtgh"
 
 
 ;----------------------------------------------------------------------------
@@ -3286,21 +3360,8 @@ Logo:
             jsr DebounceJoystick
 -           jsr ReadJoystick
             beq -
-            ; fall through
-}
-LogoDone:
-            ; set color of counters
-            ldx #3-1
--           lda #COL_HEALTH_ON
-            sta $D800,x
-            sta $D800+24*40,x
-            lda #COL_PLAIN
-            sta $D800+40,x
-            sta $D800+23*40,x
-            dex
-            bpl -
-            jmp Start
-!if INTRO=1 {
+            jmp LogoDone
+
 .fixtwainpain:
             ldx #15
             lda #COL_LEGEND
