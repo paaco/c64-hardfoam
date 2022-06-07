@@ -4,6 +4,7 @@
 ; WIP: 14+1 free deck selector
 ; TODO: randomize SID at init?
 ; TODO: balance fix: 0/9->1/9
+; TODO: balance fix: AI starts with 1 more mana
 ; TODO: Flash of Light: 2C Restore 4 Health, draw a card
 ; TODO: card draw effect and fatigue
 ; TODO: don't draw ATK/DEF on Spell cards
@@ -771,25 +772,31 @@ Start:
             dex
             bpl -
 
-            ; draw "pick deck vs opponent"
+            ; draw "pick deck vs a.i."
             lda #COL_PLAIN
             sta SuitCol
-            ldy #<(SCREEN+3)
-            lda #>(SCREEN+3)
             ldx #T_YOUR_OPPONENT_IS
+            ldy #<(SCREEN+12)
+            lda #>(SCREEN+12)
             jsr SetCursorDrawTextX
 
-            ; draw card
-            ldy #<(SCREEN+2*40+(40-24)/2-5)
-            lda #>(SCREEN+2*40+(40-24)/2-5)
-            jsr SetCursor
-            ldx #C_GM1
-            jsr DrawCard
+            lda #C_GM1
+            sta Tmp3                    ; card#
 
+DeckBuilderLoop:
+            +WaitVBL($E0)
+
+            ; draw card
+            ldy #<(SCREEN+4*40+(40-24)/2)
+            lda #>(SCREEN+4*40+(40-24)/2)
             jsr SetCursor
-            ; move up/down selects different card (rotates all 32 cards)
-            ; fire adds/removes card from deck -> replace existing legend
-            ; move right(GO) + fire starts
+            ldx Tmp3
+            jsr DrawCard
+            jsr ClearUpperLines
+            ldx Tmp3
+            ldy #<(SCREEN+2*40)
+            lda #>(SCREEN+2*40)
+            jsr SetCursorDrawCardText
 
             ; redraw selected deck
             lda #CHR_SPACE
@@ -805,7 +812,7 @@ Start:
             jsr SetCursor
             ldx #0
 -           stx Tmp2                    ; offset
-            lda Decks,x
+            lda Decks+4*16,x
             beq +                       ; skip empty
             tax
             jsr DecorateFrame           ; colors and frame
@@ -829,7 +836,46 @@ Start:
             cpx #15
             bne -
 
-            ; empty screen
+            ; move left/right selects different card (rotates all 32 cards)
+            ; fire adds/removes card from deck -> replace existing legend
+            ; move down(GO) + fire starts
+
+            ; rules:
+            ; 1) exactly 15 cards
+            ; 2) exactly 1 legendary
+            ; 3) minimum 5 spells
+            ; 4) maximum 7 spells
+
+            jsr DebounceJoystick
+-           jsr ReadJoystick            ; 111FRLDU
+            beq -
+            cmp #%11110111              ; RIGHT
+            bne +
+            lda Tmp3
+            clc
+            adc #SIZEOF_CARD
+            cmp #C_GM1+31*SIZEOF_CARD
+            bcc ++
+            lda #C_GM1+31*SIZEOF_CARD
+++          sta Tmp3
+
++           cmp #%11111011              ; LEFT
+            bne +
+            lda Tmp3
+            sec
+            sbc #SIZEOF_CARD
+            bcs ++
+            lda #C_GM1
+++          sta Tmp3
+
++           cmp #%11101111              ; FIRE
+            beq .updatedeck
+            jmp DeckBuilderLoop
+.updatedeck:
+            ; TODO
+            ;jmp DeckBuilderLoop
+
+            ; empty screen to remove deck builder
             lda #CHR_SPACE
             ldx #5*40
 -           sta SCREEN-1+10*40,x
@@ -838,47 +884,46 @@ Start:
             dex
             bne -
 
-            ;jmp *
+;             ; draw first card of each deck (16 bytes apart)
+;             ldy #<(SCREEN+15*40+(40-24)/2)
+;             lda #>(SCREEN+15*40+(40-24)/2)
+;             jsr SetCursor
+;             ldy #0
+; -           sty Tmp1
+;             ldx Decks,y
+;             jsr DrawCard
+;             lda #6
+;             jsr AddToCursor
+;             lda Tmp1
+;             clc
+;             adc #16
+;             tay
+;             cpy #4*16
+;             bne -
 
-            ; draw first card of each deck (16 bytes apart)
-            ldy #<(SCREEN+15*40+(40-24)/2)
-            lda #>(SCREEN+15*40+(40-24)/2)
-            jsr SetCursor
-            ldy #0
--           sty Tmp1
-            ldx Decks,y
-            jsr DrawCard
-            lda #6
-            jsr AddToCursor
-            lda Tmp1
-            clc
-            adc #16
-            tay
-            cpy #4*16
-            bne -
+;             ; select deck
+;             ldx #4
+;             jsr SetMaxIndexX0
+; -           lda Index
+;             sta Suit
+;             jsr ClearLowerLines
+;             ldy #<(SCREEN+21*40+(40-24)/2)
+;             lda #>(SCREEN+21*40+(40-24)/2)
+;             ldx #T_SUIT_DECK
+;             jsr SetCursorDrawTextX
 
-            ; select deck
-            ldx #4
-            jsr SetMaxIndexX0
--           lda Index
-            sta Suit
-            jsr ClearLowerLines
-            ldy #<(SCREEN+21*40+(40-24)/2)
-            lda #>(SCREEN+21*40+(40-24)/2)
-            ldx #T_SUIT_DECK
-            jsr SetCursorDrawTextX
-
-            ldy #<(SCREEN+15*40+(40-24)/2)
-            lda #>(SCREEN+15*40+(40-24)/2)
-            jsr SetCursor
-;!if DEBUG=0 {
-            jsr SelectCard
-            lda Joystick
-            cmp #%11101111              ; FIRE
-            bne -
-;}
+;             ldy #<(SCREEN+15*40+(40-24)/2)
+;             lda #>(SCREEN+15*40+(40-24)/2)
+;             jsr SetCursor
+; ;!if DEBUG=0 {
+;             jsr SelectCard
+;             lda Joystick
+;             cmp #%11101111              ; FIRE
+;             bne -
+; ;}
             ; create selected deck as player deck
-            lda Index                   ; 0..3
+            ; lda Index                   ; 0..3
+            lda #4
             jsr CreatePlayerDeck
 
             ; pull first 3 cards for both
@@ -2605,6 +2650,12 @@ Cards:
     !byte 0 ; card# (offsets) should not be 0
     C_GM1=*-Cards
     !byte $C3, $33, N_GOBLIN_LEADER, E_ALL_GAIN_A1D1, G_LEGND_GOBLIN
+    C_PM1=*-Cards
+    !byte $D3, $09, N_POLY_LEADER,   E_GUARD,      G_LEGND_POLY
+    C_CM1=*-Cards
+    !byte $E3, $44, N_CANDY_LEADER,  E_SHIELD,     G_LEGND_CANDY
+    C_SM1=*-Cards
+    !byte $F3, $13, N_SOAP_LEADER,   E_ALL_GAIN_D2,G_LEGND_SOAP
     C_GM2=*-Cards
     !byte $41, $11, N_WANNABE,       E_READY,      G_WANNABE
     C_GM3=*-Cards
@@ -2619,8 +2670,6 @@ Cards:
     !byte $03, $00, N_GOBLIN_ROCKET, E_HIT_2x2,    G_ROCKET
     C_GS3=*-Cards
     !byte $05, $00, N_GOBLIN_FIRE,   E_HIT_ALL_2,  G_FIRE
-    C_PM1=*-Cards
-    !byte $D3, $09, N_POLY_LEADER,   E_GUARD,      G_LEGND_POLY
     C_PM2=*-Cards
     !byte $51, $12, N_WANNABE,       T_NONE,       G_WANNABE
     C_PM3=*-Cards
@@ -2635,8 +2684,6 @@ Cards:
     !byte $15, $00, N_PUR_FOAM,      E_ALL_GAIN_D2,G_11
     C_PS3=*-Cards
     !byte $13, $00, N_PLASTIC_KNIFE, E_HIT_4,      G_12
-    C_CM1=*-Cards
-    !byte $E3, $44, N_CANDY_LEADER,  E_SHIELD,     G_LEGND_CANDY
     C_CM2=*-Cards
     !byte $62, $23, N_WANNABE,       T_NONE,       G_WANNABE
     C_CM3=*-Cards
@@ -2651,8 +2698,6 @@ Cards:
     !byte $22, $00, N_CANDY_WRAP,    E_WRAP_2,     G_21
     C_CS3=*-Cards
     !byte $23, $00, N_MENTHOL,       E_HIT_ALL_1,  G_22
-    C_SM1=*-Cards
-    !byte $F3, $13, N_SOAP_LEADER,   E_ALL_GAIN_D2,G_LEGND_SOAP
     C_SM2=*-Cards
     !byte $71, $11, N_WANNABE,       E_SHIELD,     G_WANNABE
     C_SM3=*-Cards
@@ -2675,6 +2720,7 @@ Decks:
     !byte C_PM1,C_PM2,C_PM3,C_PM4,C_PM5,C_PS1,C_PS2,C_PS3, C_CM2,C_CM3,C_CM4,C_CM5,C_CS1,C_CS2,C_CS3, 0
     !byte C_CM1,C_CM2,C_CM3,C_CM4,C_CM5,C_CS1,C_CS2,C_CS3, C_SM2,C_SM3,C_SM4,C_SM5,C_SS1,C_SS2,C_SS3, 0
     !byte C_SM1,C_SM2,C_SM3,C_SM4,C_SM5,C_SS1,C_SS2,C_SS3, C_GM2,C_GM3,C_GM4,C_GM5,C_GS1,C_GS2,C_GS3, 0
+    !byte C_GM1,C_GM2,C_GM3,C_GM4,C_GM5,C_GS1,C_GS2,C_GS3, 0,0,0,0,0,0,0,0
 
 
 ;----------------------------------------------------------------------------
@@ -2873,15 +2919,15 @@ TextData:
     E_INT_RESTORE_L1=*-TextData+1
     !byte M_RESTORE,M_ALL,M_L1,0
     T_YOUR_OPPONENT_IS=*-TextData
-    !byte M_PICK,M_DECK,M_VS
+    !byte M_BUILD,M_DECK,M_VS
     T_OPPONENT_NAME=*-TextData
     !byte M_OPPONENT_NAME,0
-    T_PICK_DECK=*-TextData
-    !byte M_2SPACES,M_PICK,M_A,M_DECK,M_2SPACES,0
     T_SUIT_DECK=*-TextData
     !byte M_SUIT,M_DECK,0
     T_END=*-TextData
     !byte M_END,0
+    T_GO=*-TextData
+    !byte M_GO,0
     N_SHIELDMASTA=*-TextData
     !byte M_GOBLIN,M_SHIELDMASTA,0
     N_GRUNT=*-TextData
@@ -2977,11 +3023,7 @@ MacroData:
 opponent_name1:                    !scr "a."        ; SELF-MODIFIED
 opponent_name2:                    !scr "p",'.'+$80 ; SELF-MODIFIED
 !align 1,0,0
-    M_2SPACES     =(*-MacroData)>>1 : !scr " ",' '+$80
-!align 1,0,0
-    M_PICK        =(*-MacroData)>>1 : !scr "pic",'k'+$80
-!align 1,0,0
-    M_A           =(*-MacroData)>>1 : !scr 'a'+$80
+    M_BUILD       =(*-MacroData)>>1 : !scr "buil",'d'+$80
 !align 1,0,0
     M_DECK        =(*-MacroData)>>1 : !scr "dec",'k'+$80
 !align 1,0,0
@@ -3051,13 +3093,13 @@ opponent_name2:                    !scr "p",'.'+$80 ; SELF-MODIFIED
 !align 1,0,0
     M_WRAP        =(*-MacroData)>>1 : !scr "wra",'p'+$80
 !align 1,0,0
-    M_PUR         =(*-MacroData)>>1 : !scr "pu",'r'+$80
-!align 1,0,0
     M_KNIFE       =(*-MacroData)>>1 : !scr "knif",'e'+$80
 !align 1,0,0
-    M_SIS         =(*-MacroData)>>1 : !scr "si",'s'+$80
-!align 3,0,0 ; force following text to next page
     M_WAFFLE      =(*-MacroData)>>1 : !scr "waffl",'e'+$80
+!scr 0,0 ; force following text to next page
+    M_SIS         =(*-MacroData)>>1 : !scr "si",'s'+$80
+!align 1,0,0
+    M_PUR         =(*-MacroData)>>1 : !scr "pu",'r'+$80
 !align 1,0,0
     M_SOUR        =(*-MacroData)>>1 : !scr "sou",'r'+$80
 !align 1,0,0
@@ -3082,6 +3124,8 @@ opponent_name2:                    !scr "p",'.'+$80 ; SELF-MODIFIED
     M_SLS         =(*-MacroData)>>1 : !scr "sl",'s'+$80
 !align 1,0,0
     M_HERBAL      =(*-MacroData)>>1 : !scr "herba",'l'+$80
+!align 1,0,0
+    M_GO          =(*-MacroData)>>1 : !scr "go",'!'+$80
 !if *-MacroData >= $1FF { !error "Out of MacroData memory" }
 
 AINames:
