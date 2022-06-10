@@ -1,16 +1,13 @@
 ; HARD FOAM - a 4K compressed card game
 ; Developed for the https://ausretrogamer.com/2022-reset64-4kb-craptastic-game-competition
 
-; WIP: 14+1 free deck selector
 ; TODO: randomize SID at init?
 ; TODO: balance fix: 0/9->1/9
-; TODO: balance fix: AI starts with 1 more mana
 ; TODO: Flash of Light: 2C Restore 4 Health, draw a card
 ; TODO: card draw effect and fatigue
 ; TODO: don't draw ATK/DEF on Spell cards
 ; TODO: on play select place on table
 ; TODO: on play select target on table (own or opponent)
-; TODO: decide on logo (adds at least 200 bytes packed)
 ; TODO: experimenting with _Draw vs specific functions showed 2x speedup (maybe more)
 
 !ifndef DEBUG {DEBUG=0}
@@ -125,6 +122,7 @@ SIZEOF_PD=64
 ; Draws rectangle 5x5 (upto 8x6) via DrawF function (clobbers A,Y)
 !addr _Draw=$E0     ; $E0-$F6 is block drawing routine
 !addr DeckBuilderCard=AIData+PD_TABLE+TD_CARD ; first card in AI deck (makes PlayFX possible)
+!addr DeckBuilderSpellCount=Index
 
 ; macro to wait for specific raster line to avoid flickering (clobbers A)
 !macro WaitVBL .LINE {
@@ -427,12 +425,12 @@ ReadJoystick:
 ; Reads keyboard and emulates joystick with Cursor, (right) Shift and Return keys (clobbers A,X,Y)
 ReadKeyboardAsJoystick:
             ; scan keyboard
-            lda #%10111110      ; rows 0 and 6: 7=C_U/D 4=S_R 2=C_L/R 1=CR
+            lda #%10111110      ; rows 0 and 6: 7=C_U/D 4=S_R 2=C_L/R 1=CR 6=A_UP
             sta $DC00
             ; (Not implemented) row 1 >>2 |Bit 1| S_L |  E  |  S  |  Z  |  4  |  A  |  W  |  3  |
             ; (Not implemented) row 7 >>1 |Bit 7| R/S |  Q  |  C= |SPACE|  2  | CTRL|A_LFT|  1  |
             lda $DC01
-            ora #%01101001      ; ignore other bits ==> $FF is nothing pressed
+            ora #%00101001      ; ignore other bits ==> $FF is nothing pressed
             eor #%11111111      ; 1-active is easier to test double bits
             tay                 ; backup
             ; Fire
@@ -463,6 +461,14 @@ ReadKeyboardAsJoystick:
             beq +               ; no
             ldx #%11111011      ; LEFT
 +           txa
+            and Joystick
+            sta Joystick
+            ; A_UP -> SPECIAL (can only be trigged by keyboard)
+++          tya
+            and #%01000000      ; A_UP?
+            beq ++
+            ldx #%10111111      ; SPECIAL
+            txa
             and Joystick
             sta Joystick
 ++          lda Joystick        ; end with joystick in A
@@ -815,19 +821,20 @@ DeckBuilderLoop:
             lda #>(SCREEN+10*40+3)
             jsr SetCursor
             ldx #0
-            stx Index                   ; #spells
+            stx DeckBuilderSpellCount
 -           stx Tmp2                    ; offset
+            .fixupdeckptr0=*+1
             lda Decks+4*16,x
             beq +                       ; skip empty
             tax
             inc TEMPCARDMAP,x           ; mark card# as used
             jsr DecorateFrame           ; colors and frame
             ldy #0
-            lda frame_TYPE              ; D7/D8 (bit off a hack)
+            lda frame_TYPE              ; D7/D8
             lsr                         ; C=1->D7(spell)
             bcc ++
-            inc Index                   ; spell counter
-++          lda frame_TYPE              ; D7/D8 (bit off a hack)
+            inc DeckBuilderSpellCount
+++          lda frame_TYPE
             sta (_CursorPos),y
             lda SuitCol
             sta (_ColorPos),y
@@ -854,9 +861,6 @@ DeckBuilderLoop:
             ; 3) minimum 5 spells
             ; 4) maximum 7 spells
 
-            lda Index
-            sta $0400 ; DEBUG
-
             jsr DebounceJoystick
 -           jsr ReadJoystick            ; 111FRLDU
             beq -
@@ -881,9 +885,31 @@ DeckBuilderLoop:
             lda #C_LASTCARD
 ++          sta DeckBuilderCard
 
++           cmp #%11110111              ; RIGHT
+            beq .donebuilding
+
 +           cmp #%11101111              ; FIRE
             beq .updatedeck
 
+            cmp #%10111111              ; SPECIAL (F5 or A_UP=PageDown in VICE)
+            bne +
+            ; rotate editable deck
+            lda .fixupdeckptr0
+            clc
+            adc #16
+            cmp #<(UserDeck+16)
+            bne ++
+            lda #$FF
+            sta .fixupdeckidx
+            lda #<Decks
+++          sta .fixupdeckptr0
+            sta .fixupdeckptr1
+            sta .fixupdeckptr2
+            sta .fixupdeckptr3
+            sta .fixupdeckptr4
+            sta .fixupdeckptr5
+            inc .fixupdeckidx
++
 --          jmp DeckBuilderLoop
 
             ; fire adds/removes card from deck
@@ -892,14 +918,20 @@ DeckBuilderLoop:
             cpx #C_LASTLEGEND+1
             bcs +
             ; uncheck current legend (does nothing if deck was empty)
-            ldy Decks+4*16
+            .fixupdeckptr1=*+1
+            ldy Decks+4*16              ; SELF-MODIFIED
             lda #CHR_SPACE
             sta TEMPCARDMAP,y
+
 +           lda TEMPCARDMAP,x
             and #1
             bne +                       ; removal is always possible
-            ldy Decks+4*16+14           ; last card in deck
+            ; A=0 here
+            ldy #14
+            .fixupdeckptr2=*+1
+            lda Decks+4*16,y            ; last card in deck
             bne --                      ; deck already full
+            ; A still 0 here
 +           eor #1
             sta TEMPCARDMAP,x
 
@@ -911,6 +943,7 @@ DeckBuilderLoop:
             beq +                       ; no
             ; store card X in deck
             txa
+            .fixupdeckptr3=*+1
             sta Decks+4*16,y
             iny
 +           inx
@@ -918,62 +951,40 @@ DeckBuilderLoop:
             bne -
             ; erase remainder of deck
             lda #0
+            .fixupdeckptr4=*+1
 -           sta Decks+4*16,y
             iny
             cpy #16
             bne -
-            jmp DeckBuilderLoop
+--          jmp DeckBuilderLoop
 
 .donebuilding:
+            ; deck should be full
+            ldy #14
+            .fixupdeckptr5=*+1
+            lda Decks+4*16,y            ; last card in deck
+            beq --                      ; deck not full
+
+            ; deck should have 5-7 spells
+            lda DeckBuilderSpellCount
+            cmp #5
+            bcc --                      ; less than 5
+            cmp #7+1
+            bcs --                      ; gt/equal 8
+
             ; empty screen to remove deck builder
             lda #CHR_SPACE
             ldx #5*40
 -           sta SCREEN-1+10*40,x
-            sta SCREEN-1+15*40,x
-            sta SCREEN-1+20*40,x
             dex
             bne -
+            ; empty misused memory
+            lda #$FF
+            sta DeckBuilderCard
 
-;             ; draw first card of each deck (16 bytes apart)
-;             ldy #<(SCREEN+15*40+(40-24)/2)
-;             lda #>(SCREEN+15*40+(40-24)/2)
-;             jsr SetCursor
-;             ldy #0
-; -           sty Tmp1
-;             ldx Decks,y
-;             jsr DrawCard
-;             lda #6
-;             jsr AddToCursor
-;             lda Tmp1
-;             clc
-;             adc #16
-;             tay
-;             cpy #4*16
-;             bne -
-
-;             ; select deck
-;             ldx #4
-;             jsr SetMaxIndexX0
-; -           lda Index
-;             sta Suit
-;             jsr ClearLowerLines
-;             ldy #<(SCREEN+21*40+(40-24)/2)
-;             lda #>(SCREEN+21*40+(40-24)/2)
-;             ldx #T_SUIT_DECK
-;             jsr SetCursorDrawTextX
-
-;             ldy #<(SCREEN+15*40+(40-24)/2)
-;             lda #>(SCREEN+15*40+(40-24)/2)
-;             jsr SetCursor
-; ;!if DEBUG=0 {
-;             jsr SelectCard
-;             lda Joystick
-;             cmp #%11101111              ; FIRE
-;             bne -
-; ;}
             ; create selected deck as player deck
-            ; lda Index                   ; 0..3
-            lda #4
+            .fixupdeckidx=*+1
+            lda #4                      ; SELF-MODIFIED (0..3 are AI decks, 4 is user deck)
             jsr CreatePlayerDeck
 
             ; pull first 3 cards for both
@@ -998,6 +1009,10 @@ DeckBuilderLoop:
             ldy #<(SCREEN+15*40)
             lda #>(SCREEN+15*40)
             jsr SetCursorDrawCardBack
+
+            ; balance: give AI 1 extra energy to start with
+            ldx #AIData
+            jsr Energize
 
 ;---------------
 ; PLAYER'S TURN
@@ -2767,13 +2782,16 @@ C_LASTCARD=C_SS3
     !byte $34, $00, N_HERBAL_SOAP,   E_RESTORE_L4, G_11
 NUM_CARDS=(*-Cards)/5
 
+    !fill 60,0
 ; default decks (16 bytes each, starting with legendary, last byte is not used)
 Decks:
     !byte C_GM1,C_GM2,C_GM3,C_GM4,C_GM5,C_GS1,C_GS2,C_GS3, C_PM2,C_PM3,C_PM4,C_PM5,C_PS1,C_PS2,C_PS3, 0
     !byte C_PM1,C_PM2,C_PM3,C_PM4,C_PM5,C_PS1,C_PS2,C_PS3, C_CM2,C_CM3,C_CM4,C_CM5,C_CS1,C_CS2,C_CS3, 0
     !byte C_CM1,C_CM2,C_CM3,C_CM4,C_CM5,C_CS1,C_CS2,C_CS3, C_SM2,C_SM3,C_SM4,C_SM5,C_SS1,C_SS2,C_SS3, 0
     !byte C_SM1,C_SM2,C_SM3,C_SM4,C_SM5,C_SS1,C_SS2,C_SS3, C_GM2,C_GM3,C_GM4,C_GM5,C_GS1,C_GS2,C_GS3, 0
+UserDeck:
     !byte C_GM1,C_GM2,C_GM3,C_GM4,C_GM5,C_GS1,C_GS2,C_GS3, 0,0,0,0,0,0,0,0
+!if (>Decks != >UserDeck) { !error "All Decks must start in same page" }
 
 
 ;----------------------------------------------------------------------------
