@@ -65,6 +65,7 @@ MAX_LIFE=10
 AI_ATTACKS=50
 
 !addr SCREEN=$0400
+!addr TEMPCARDMAP=$2020
 
 ; ZP addresses
 !addr _CursorPos=$02 ; ptr
@@ -123,6 +124,7 @@ SIZEOF_PD=64
 !addr AIData=$90    ; PlayerData+$80 (SIZEOF_PD=64 bytes)
 ; Draws rectangle 5x5 (upto 8x6) via DrawF function (clobbers A,Y)
 !addr _Draw=$E0     ; $E0-$F6 is block drawing routine
+!addr DeckBuilderCard=AIData+PD_TABLE+TD_CARD ; first card in AI deck (makes PlayFX possible)
 
 ; macro to wait for specific raster line to avoid flickering (clobbers A)
 !macro WaitVBL .LINE {
@@ -781,43 +783,51 @@ Start:
             jsr SetCursorDrawTextX
 
             lda #C_GM1
-            sta Tmp3                    ; card#
+            sta DeckBuilderCard ; card#
 
 DeckBuilderLoop:
             +WaitVBL($E0)
 
-            ; draw card
+            ; draw card and description
             ldy #<(SCREEN+4*40+(40-24)/2)
             lda #>(SCREEN+4*40+(40-24)/2)
             jsr SetCursor
-            ldx Tmp3
+            ldx DeckBuilderCard
             jsr DrawCard
             jsr ClearUpperLines
-            ldx Tmp3
+            ldx DeckBuilderCard
             ldy #<(SCREEN+2*40)
             lda #>(SCREEN+2*40)
             jsr SetCursorDrawCardText
 
-            ; redraw selected deck
+            ; erase deck
             lda #CHR_SPACE
             ldx #5*40
 -           sta SCREEN-1+10*40,x
             sta SCREEN-1+15*40,x
             sta SCREEN-1+20*40,x
+            sta TEMPCARDMAP,x            ; and reset card counters
             dex
             bne -
 
+            ; redraw deck
             ldy #<(SCREEN+10*40+3)
             lda #>(SCREEN+10*40+3)
             jsr SetCursor
             ldx #0
+            stx Index                   ; #spells
 -           stx Tmp2                    ; offset
             lda Decks+4*16,x
             beq +                       ; skip empty
             tax
+            inc TEMPCARDMAP,x           ; mark card# as used
             jsr DecorateFrame           ; colors and frame
             ldy #0
-            lda frame_TYPE
+            lda frame_TYPE              ; D7/D8 (bit off a hack)
+            lsr                         ; C=1->D7(spell)
+            bcc ++
+            inc Index                   ; spell counter
+++          lda frame_TYPE              ; D7/D8 (bit off a hack)
             sta (_CursorPos),y
             lda SuitCol
             sta (_ColorPos),y
@@ -836,45 +846,85 @@ DeckBuilderLoop:
             cpx #15
             bne -
 
-            ; move left/right selects different card (rotates all 32 cards)
-            ; fire adds/removes card from deck -> replace existing legend
-            ; move down(GO) + fire starts
-
+            ; move right(GO) + fire starts
+            ; "L/R SEL, F ADD/DEL, D+F GO"
             ; rules:
             ; 1) exactly 15 cards
             ; 2) exactly 1 legendary
             ; 3) minimum 5 spells
             ; 4) maximum 7 spells
 
+            lda Index
+            sta $0400 ; DEBUG
+
             jsr DebounceJoystick
 -           jsr ReadJoystick            ; 111FRLDU
             beq -
-            cmp #%11110111              ; RIGHT
+
+            ; move up/down selects different card (rotates all cards)
+            cmp #%11111101              ; DOWN
             bne +
-            lda Tmp3
+            lda DeckBuilderCard
             clc
             adc #SIZEOF_CARD
-            cmp #C_GM1+31*SIZEOF_CARD
+            cmp #C_LASTCARD
             bcc ++
-            lda #C_GM1+31*SIZEOF_CARD
-++          sta Tmp3
+            lda #C_FIRSTCARD
+++          sta DeckBuilderCard
 
-+           cmp #%11111011              ; LEFT
++           cmp #%11111110              ; UP
             bne +
-            lda Tmp3
+            lda DeckBuilderCard
             sec
             sbc #SIZEOF_CARD
             bcs ++
-            lda #C_GM1
-++          sta Tmp3
+            lda #C_LASTCARD
+++          sta DeckBuilderCard
 
 +           cmp #%11101111              ; FIRE
             beq .updatedeck
-            jmp DeckBuilderLoop
-.updatedeck:
-            ; TODO
-            ;jmp DeckBuilderLoop
 
+--          jmp DeckBuilderLoop
+
+            ; fire adds/removes card from deck
+.updatedeck:
+            ldx DeckBuilderCard
+            cpx #C_LASTLEGEND+1
+            bcs +
+            ; uncheck current legend (does nothing if deck was empty)
+            ldy Decks+4*16
+            lda #CHR_SPACE
+            sta TEMPCARDMAP,y
++           lda TEMPCARDMAP,x
+            and #1
+            bne +                       ; removal is always possible
+            ldy Decks+4*16+14           ; last card in deck
+            bne --                      ; deck already full
++           eor #1
+            sta TEMPCARDMAP,x
+
+            ; rebuild deck
+            ldy #0                      ; index in new deck
+            ldx #1                      ; card# always >0
+-           lda TEMPCARDMAP,x
+            and #1                      ; used?
+            beq +                       ; no
+            ; store card X in deck
+            txa
+            sta Decks+4*16,y
+            iny
++           inx
+            cpx #5*40
+            bne -
+            ; erase remainder of deck
+            lda #0
+-           sta Decks+4*16,y
+            iny
+            cpy #16
+            bne -
+            jmp DeckBuilderLoop
+
+.donebuilding:
             ; empty screen to remove deck builder
             lda #CHR_SPACE
             ldx #5*40
@@ -2649,6 +2699,7 @@ SIZEOF_CARD=5       ; 256/5 => 50 cards max (0 and $FF are used for other purpos
 Cards:
     !byte 0 ; card# (offsets) should not be 0
     C_GM1=*-Cards
+C_FIRSTCARD=C_GM1
     !byte $C3, $33, N_GOBLIN_LEADER, E_ALL_GAIN_A1D1, G_LEGND_GOBLIN
     C_PM1=*-Cards
     !byte $D3, $09, N_POLY_LEADER,   E_GUARD,      G_LEGND_POLY
@@ -2656,6 +2707,7 @@ Cards:
     !byte $E3, $44, N_CANDY_LEADER,  E_SHIELD,     G_LEGND_CANDY
     C_SM1=*-Cards
     !byte $F3, $13, N_SOAP_LEADER,   E_ALL_GAIN_D2,G_LEGND_SOAP
+C_LASTLEGEND=C_SM1
     C_GM2=*-Cards
     !byte $41, $11, N_WANNABE,       E_READY,      G_WANNABE
     C_GM3=*-Cards
@@ -2711,6 +2763,7 @@ Cards:
     C_SS2=*-Cards
     !byte $35, $00, N_SLS,           E_HIT_3x3,    G_30
     C_SS3=*-Cards
+C_LASTCARD=C_SS3
     !byte $34, $00, N_HERBAL_SOAP,   E_RESTORE_L4, G_11
 NUM_CARDS=(*-Cards)/5
 
