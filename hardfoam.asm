@@ -1,8 +1,6 @@
 ; HARD FOAM - a 4K compressed card game
 ; Developed for the https://ausretrogamer.com/2022-reset64-4kb-craptastic-game-competition
 
-; TODO: randomize SID at init?
-; TODO: balance fix: 0/9->1/9
 ; TODO: Flash of Light: 2C Restore 4 Health, draw a card
 ; TODO: card draw effect and fatigue
 ; TODO: don't draw ATK/DEF on Spell cards
@@ -123,6 +121,7 @@ SIZEOF_PD=64
 !addr _Draw=$E0     ; $E0-$F6 is block drawing routine
 !addr DeckBuilderCard=AIData+PD_TABLE+TD_CARD ; first card in AI deck (makes PlayFX possible)
 !addr DeckBuilderSpellCount=Index
+!addr DeckBuilderLast=Tmp2
 
 ; macro to wait for specific raster line to avoid flickering (clobbers A)
 !macro WaitVBL .LINE {
@@ -759,9 +758,9 @@ Start:
             jsr ClearAll
             jsr InitPlayersData
 
-            ; DEBUG
-            lda #33                     ; TODO seed via D418
-            sta ZP_RNG_LOW              ; seed prng with some value
+            ; ; DEBUG
+            ; lda #33                     ; TODO seed via D418
+            ; sta ZP_RNG_LOW              ; seed prng with some value
 
             ; pick random AI deck
             jsr Random
@@ -784,11 +783,11 @@ Start:
             lda #COL_PLAIN
             sta SuitCol
             ldx #T_YOUR_OPPONENT_IS
-            ldy #<(SCREEN+12)
-            lda #>(SCREEN+12)
+            ldy #<(SCREEN+14)
+            lda #>(SCREEN+14)
             jsr SetCursorDrawTextX
 
-            lda #C_GM1
+            lda #C_GM3
             sta DeckBuilderCard ; card#
 
 DeckBuilderLoop:
@@ -822,9 +821,10 @@ DeckBuilderLoop:
             jsr SetCursor
             ldx #0
             stx DeckBuilderSpellCount
--           stx Tmp2                    ; offset
+-           stx Tmp1                    ; offset
             .fixupdeckptr0=*+1
             lda Decks+4*16,x
+            sta DeckBuilderLast         ; last card# or 0 if empty
             beq +                       ; skip empty
             tax
             inc TEMPCARDMAP,x           ; mark card# as used
@@ -848,13 +848,13 @@ DeckBuilderLoop:
             jsr DrawText
 +           lda #40
             jsr AddToCursor
-            ldx Tmp2
+            ldx Tmp1
             inx
             cpx #15
             bne -
 
             ; move right(GO) + fire starts
-            ; "L/R SEL, F ADD/DEL, D+F GO"
+            ; "U/D SEL, F ADD/DEL, R&F GO"
             ; rules:
             ; 1) exactly 15 cards
             ; 2) exactly 1 legendary
@@ -906,8 +906,6 @@ DeckBuilderLoop:
             sta .fixupdeckptr1
             sta .fixupdeckptr2
             sta .fixupdeckptr3
-            sta .fixupdeckptr4
-            sta .fixupdeckptr5
             inc .fixupdeckidx
 +
 --          jmp DeckBuilderLoop
@@ -927,9 +925,7 @@ DeckBuilderLoop:
             and #1
             bne +                       ; removal is always possible
             ; A=0 here
-            ldy #14
-            .fixupdeckptr2=*+1
-            lda Decks+4*16,y            ; last card in deck
+            lda DeckBuilderLast
             bne --                      ; deck already full
             ; A still 0 here
 +           eor #1
@@ -943,15 +939,15 @@ DeckBuilderLoop:
             beq +                       ; no
             ; store card X in deck
             txa
-            .fixupdeckptr3=*+1
+            .fixupdeckptr2=*+1
             sta Decks+4*16,y
             iny
 +           inx
             cpx #5*40
             bne -
             ; erase remainder of deck
-            lda #0
-            .fixupdeckptr4=*+1
+            ;lda #0                     ; A already 0
+            .fixupdeckptr3=*+1
 -           sta Decks+4*16,y
             iny
             cpy #16
@@ -960,9 +956,7 @@ DeckBuilderLoop:
 
 .donebuilding:
             ; deck should be full
-            ldy #14
-            .fixupdeckptr5=*+1
-            lda Decks+4*16,y            ; last card in deck
+            lda DeckBuilderLast
             beq --                      ; deck not full
 
             ; deck should have 5-7 spells
@@ -2717,7 +2711,7 @@ Cards:
 C_FIRSTCARD=C_GM1
     !byte $C3, $33, N_GOBLIN_LEADER, E_ALL_GAIN_A1D1, G_LEGND_GOBLIN
     C_PM1=*-Cards
-    !byte $D3, $09, N_POLY_LEADER,   E_GUARD,      G_LEGND_POLY
+    !byte $D3, $19, N_POLY_LEADER,   E_GUARD,      G_LEGND_POLY
     C_CM1=*-Cards
     !byte $E3, $44, N_CANDY_LEADER,  E_SHIELD,     G_LEGND_CANDY
     C_SM1=*-Cards
@@ -2782,7 +2776,7 @@ C_LASTCARD=C_SS3
     !byte $34, $00, N_HERBAL_SOAP,   E_RESTORE_L4, G_11
 NUM_CARDS=(*-Cards)/5
 
-    !fill 60,0
+    !align 255,0,0
 ; default decks (16 bytes each, starting with legendary, last byte is not used)
 Decks:
     !byte C_GM1,C_GM2,C_GM3,C_GM4,C_GM5,C_GS1,C_GS2,C_GS3, C_PM2,C_PM3,C_PM4,C_PM5,C_PS1,C_PS2,C_PS3, 0
@@ -2790,7 +2784,7 @@ Decks:
     !byte C_CM1,C_CM2,C_CM3,C_CM4,C_CM5,C_CS1,C_CS2,C_CS3, C_SM2,C_SM3,C_SM4,C_SM5,C_SS1,C_SS2,C_SS3, 0
     !byte C_SM1,C_SM2,C_SM3,C_SM4,C_SM5,C_SS1,C_SS2,C_SS3, C_GM2,C_GM3,C_GM4,C_GM5,C_GS1,C_GS2,C_GS3, 0
 UserDeck:
-    !byte C_GM1,C_GM2,C_GM3,C_GM4,C_GM5,C_GS1,C_GS2,C_GS3, 0,0,0,0,0,0,0,0
+    !byte C_GM1,C_GM2,C_GM3,C_GM4,C_GM5,C_GS1,C_GS2,C_GS3, C_CM2,C_CM3,C_CM4,C_SS1,C_SS2,0,0,0
 !if (>Decks != >UserDeck) { !error "All Decks must start in same page" }
 
 
@@ -2990,15 +2984,13 @@ TextData:
     E_INT_RESTORE_L1=*-TextData+1
     !byte M_RESTORE,M_ALL,M_L1,0
     T_YOUR_OPPONENT_IS=*-TextData
-    !byte M_BUILD,M_DECK,M_VS
+    !byte M_TWAINPAIN,M_HARD,M_FOAM,M_BUILD,M_57SPELLS,M_DECK,M_VS
     T_OPPONENT_NAME=*-TextData
     !byte M_OPPONENT_NAME,0
     T_SUIT_DECK=*-TextData
     !byte M_SUIT,M_DECK,0
     T_END=*-TextData
     !byte M_END,0
-    T_GO=*-TextData
-    !byte M_GO,0
     N_SHIELDMASTA=*-TextData
     !byte M_GOBLIN,M_SHIELDMASTA,0
     N_GRUNT=*-TextData
@@ -3196,7 +3188,9 @@ opponent_name2:                    !scr "p",'.'+$80 ; SELF-MODIFIED
 !align 1,0,0
     M_HERBAL      =(*-MacroData)>>1 : !scr "herba",'l'+$80
 !align 1,0,0
-    M_GO          =(*-MacroData)>>1 : !scr "go",'!'+$80
+    M_57SPELLS    =(*-MacroData)>>1 : !scr "5-7",$D7
+!align 1,0,0
+    M_TWAINPAIN   =(*-MacroData)>>1 : !scr "twain pain game",'s'+$80
 !if *-MacroData >= $1FF { !error "Out of MacroData memory" }
 
 AINames:
