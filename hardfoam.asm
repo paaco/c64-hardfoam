@@ -1,7 +1,6 @@
 ; HARD FOAM - a 4K compressed card game
 ; Developed for the https://ausretrogamer.com/2022-reset64-4kb-craptastic-game-competition
 
-; TODO: Flash of Light: 2C Restore 4 Health, draw a card
 ; TODO: card draw effect and fatigue
 ; TODO: don't draw ATK/DEF on Spell cards
 ; TODO: on play select place on table
@@ -783,8 +782,8 @@ Start:
             lda #COL_PLAIN
             sta SuitCol
             ldx #T_YOUR_OPPONENT_IS
-            ldy #<(SCREEN+14)
-            lda #>(SCREEN+14)
+            ldy #<(SCREEN+5)
+            lda #>(SCREEN+5)
             jsr SetCursorDrawTextX
 
             lda #C_GM3
@@ -862,7 +861,8 @@ DeckBuilderLoop:
             ; 4) maximum 7 spells
 
             jsr DebounceJoystick
--           jsr ReadJoystick            ; 111FRLDU
+-           inc ZP_RNG_HIGH             ; randomizes deck sorting
+            jsr ReadJoystick            ; 111FRLDU
             beq -
 
             ; move up/down selects different card (rotates all cards)
@@ -2126,7 +2126,7 @@ Effect_RestoreA:
 
 +           cmp #E_RESTORE_L1
             bne +
-; restore 4 life
+; restore 1 life
 Effect_RestoreL1:
             lda #1
             jmp Effect_RestoreA
@@ -2984,7 +2984,7 @@ TextData:
     E_INT_RESTORE_L1=*-TextData+1
     !byte M_RESTORE,M_ALL,M_L1,0
     T_YOUR_OPPONENT_IS=*-TextData
-    !byte M_TWAINPAIN,M_HARD,M_FOAM,M_BUILD,M_57SPELLS,M_DECK,M_VS
+    !byte M_HARD,M_FOAM,M_TWAINPAIN,M_BUILD,M_57SPELLS,M_DECK,M_VS
     T_OPPONENT_NAME=*-TextData
     !byte M_OPPONENT_NAME,0
     T_SUIT_DECK=*-TextData
@@ -3190,7 +3190,7 @@ opponent_name2:                    !scr "p",'.'+$80 ; SELF-MODIFIED
 !align 1,0,0
     M_57SPELLS    =(*-MacroData)>>1 : !scr "5-7",$D7
 !align 1,0,0
-    M_TWAINPAIN   =(*-MacroData)>>1 : !scr "twain pain game",'s'+$80
+    M_TWAINPAIN   =(*-MacroData)>>1 : !scr "by twain pain games            ",' '+$80
 !if *-MacroData >= $1FF { !error "Out of MacroData memory" }
 
 AINames:
